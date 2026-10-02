@@ -1,0 +1,15 @@
+{
+  "source": "https://example.com/public-test-metadata",
+  "entries": [
+    { "game": "hk4e", "lang": "zh-cn", "kind": "item", "item_id": "10000003", "name": "琴", "item_type": "角色", "rank_type": "5" },
+    { "game": "hk4e", "lang": "en-us", "kind": "item", "item_id": "10000003", "name": "Jean", "item_type": "Character", "rank_type": "5" },
+    { "game": "hk4e", "lang": "zh-cn", "kind": "item", "item_id": "11401", "name": "测试武器", "item_type": "武器", "rank_type": "4" },
+    { "game": "hk4e", "lang": "zh-cn", "kind": "pool", "pool_id": "10000003", "name": "测试祈愿卡池", "gacha_type": "301" },
+    { "game": "hkrpg", "lang": "zh-cn", "kind": "item", "item_id": "1001", "name": "三月七", "item_type": "角色", "rank_type": "4" },
+    { "game": "hkrpg", "lang": "zh-cn", "kind": "pool", "pool_id": "2003", "name": "测试跃迁卡池", "gacha_type": "11" },
+    { "game": "nap", "lang": "zh-cn", "kind": "item", "item_id": "1001", "name": "测试音擎", "item_type": "音擎", "rank_type": "4" },
+    { "game": "nap", "lang": "zh-cn", "kind": "pool", "pool_id": "2003", "name": "测试调频卡池", "gacha_type": "2" },
+    { "game": "hk4e_ugc", "lang": "zh-cn", "kind": "item", "item_id": "10000003", "name": "测试衣装", "item_type": "衣装", "rank_type": "7" },
+    { "game": "hk4e_ugc", "lang": "zh-cn", "kind": "pool", "pool_id": "2003", "name": "测试衣装卡池", "gacha_type": "20011" }
+  ]
+}

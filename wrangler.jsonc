@@ -19,6 +19,10 @@
   ],
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 0.1
+    "head_sampling_rate": 0.1,
+    "redact_query_string": true,
+    "logs": {
+      "invocation_logs": false
+    }
   }
 }

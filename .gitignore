@@ -8,9 +8,7 @@ dist/
 .env*
 
 # Local development
-test
-migrations
-*metadata.sql
+/metadata.sql
 
 # macOS Resources
 .DS_Store
