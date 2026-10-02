@@ -33,7 +33,7 @@ These public sources change over time and do not guarantee coverage of every gac
 
 ## Bindings and tables
 
-`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. No new database, KV, R2 or Durable Objects are required.
+`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. This project uses D1 for public item metadata storage.
 
 | `game`     | Separate D1 table  | Content                                      |
 | ---------- | ------------------ | -------------------------------------------- |
@@ -42,7 +42,7 @@ These public sources change over time and do not guarantee coverage of every gac
 | `nap`      | `zenless_meta`     | ZZZ agents, W-Engines and Bangboo            |
 | `hk4e_ugc` | `genshin_ugc_meta` | Miliastra outfits and related rewards        |
 
-The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is currently maintained. Migration `0003_remove_gacha_type.sql` removes the unused `gacha_type` column and restricts rows to items while preserving existing metadata. The API neither queries nor writes banner schedules; `/api/v1/pools` returns 404. Migration `0002_item_details.sql` adds unified type and icon fields. Apply all migrations before deployment.
+The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is currently maintained. Migration `0003_remove_gacha_type.sql` removes the unused `gacha_type` column and restricts rows to items while preserving existing metadata. Migration `0002_item_details.sql` adds unified type and icon fields. Apply all migrations before deployment.
 
 `ALLOWED_ORIGINS` defaults to `*` and can be changed to a comma-separated list of complete blog origins. Public API requests omit credentials; CORS origin restrictions are not authentication. The admin API uses the separate secret `METADATA_UPDATE_TOKEN`, which must never be included in the blog frontend.
 

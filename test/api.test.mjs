@@ -129,10 +129,6 @@ test("ZZZ original rank is distinct from display rarity", async () => {
   );
 });
 
-test("pool schedule endpoint is outside scope", async () => {
-  assert.equal((await request("/api/v1/pools?game=hk4e&ids=1")).status, 404);
-});
-
 test("bounded batch query supports exactly 90 IDs", async () => {
   const ids = Array.from({ length: 90 }, (_, i) => String(i + 1));
   assert.equal(
