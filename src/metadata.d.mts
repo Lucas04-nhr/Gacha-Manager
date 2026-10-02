@@ -7,7 +7,7 @@ export interface ValidatedEntry {
   item_type: string | null;
   rank_type: string | null;
   gacha_type: string | null;
-  item_category: 'character' | 'weapon' | 'light_cone' | 'w_engine' | 'bangboo' | 'outfit' | null;
+  item_category: 'character' | 'weapon' | 'light_cone' | 'w_engine' | 'bangboo' | 'outfit' | 'ugc_item' | null;
   icon: string | null;
 }
 export function validateMetadata(input: unknown, maxEntries?: number): {

@@ -4,9 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { Miniflare, convertV4MiniflareOptions, CorePaths } from 'miniflare';
 
 const fixture = JSON.parse(await readFile(new URL('./fixtures/metadata.json', import.meta.url), 'utf8'));
-const schema = await readFile(new URL('../migrations/0001_metadata.sql', import.meta.url), 'utf8');
+fixture.entries = fixture.entries.filter(row => row.kind === 'item');
+const schema = (await Promise.all(['0001_metadata.sql', '0002_item_details.sql'].map(file => readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')))).join('\n');
 const token = 'test-only-metadata-secret-not-for-production';
-const options = { unsafeTriggerHandlers: true, modules: true, scriptPath: 'dist/index.js', compatibilityDate: '2026-10-02', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'update-tests' }, bindings: { ALLOWED_ORIGINS: '*', METADATA_UPDATE_TOKEN: token, METADATA_FEEDS: '[]' } };
+const options = { unsafeTriggerHandlers: true, modules: true, scriptPath: 'dist/index.js', compatibilityDate: '2026-10-02', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'update-tests' }, bindings: { ALLOWED_ORIGINS: '*', METADATA_UPDATE_TOKEN: token, METADATA_FEEDS: '[]', UPSTREAM_SYNC_ENABLED: 'false', UPSTREAM_LANGUAGES: '[]' } };
 let mf;
 let db;
 async function migrate(instance) {
@@ -47,7 +48,7 @@ test('authentication fails closed without token or with malformed/wrong authoriz
     assert.equal(response.status, 401);
     assert.equal(response.headers.get('WWW-Authenticate'), 'Bearer');
   }
-  const disabled = new Miniflare(convertV4MiniflareOptions({ ...options, bindings: { ALLOWED_ORIGINS: '*', METADATA_FEEDS: '[]' } }));
+  const disabled = new Miniflare(convertV4MiniflareOptions({ ...options, bindings: { ALLOWED_ORIGINS: '*', METADATA_FEEDS: '[]', UPSTREAM_SYNC_ENABLED: 'false', UPSTREAM_LANGUAGES: '[]' } }));
   try {
     const response = await disabled.dispatchFetch('https://worker.test/api/v1/admin/metadata', { method: 'POST' });
     assert.equal(response.status, 503);
@@ -57,7 +58,7 @@ test('authentication fails closed without token or with malformed/wrong authoriz
 });
 
 test('validate full payload before writes and reject user fields, wrong types and invalid JSON', async () => {
-  const bad = { ...fixture, entries: [{ ...fixture.entries[0], name: 'must not change' }, { ...fixture.entries[4], uid: '123' }] };
+  const bad = { ...fixture, entries: [{ ...fixture.entries[0], name: 'must not change' }, { ...fixture.entries.find(row => row.game === 'hkrpg'), uid: '123' }] };
   assert.equal((await post(bad)).status, 400);
   assert.equal((await item('hk4e', '10000003')).items[0].name, '琴');
   assert.equal((await post('{')).status, 400);
@@ -72,21 +73,20 @@ test('validate full payload before writes and reject user fields, wrong types an
 test('D1 rolls back earlier table writes when a later table fails', async () => {
   await db.prepare("CREATE TRIGGER reject_test_update BEFORE UPDATE ON starrail_meta BEGIN SELECT RAISE(ABORT, 'test rollback'); END").run();
   try {
-    const payload = { ...fixture, entries: [{ ...fixture.entries[0], name: 'must roll back' }, { ...fixture.entries[4], name: 'rejected' }] };
+    const payload = { ...fixture, entries: [{ ...fixture.entries[0], name: 'must roll back' }, { ...fixture.entries.find(row => row.game === 'hkrpg'), name: 'rejected' }] };
     assert.equal((await post(payload)).status, 503);
     assert.equal((await item('hk4e', '10000003')).items[0].name, '琴');
     assert.equal((await item('hkrpg', '1001')).items[0].name, '三月七');
   } finally { await db.prepare('DROP TRIGGER reject_test_update').run(); }
 });
 
-test('upserts preserve historical pools and unrelated language entries', async () => {
+test('upserts preserve unrelated games and language entries', async () => {
   const updated = { ...fixture, entries: [{ ...fixture.entries[0], name: "Jean's updated name" }] };
   assert.equal((await post(updated)).status, 200);
   assert.equal((await item('hk4e', '10000003')).items[0].name, "Jean's updated name");
   const english = await mf.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&ids=10000003');
   assert.equal((await english.json()).items[0].name, 'Jean');
-  const pool = await mf.dispatchFetch('https://worker.test/api/v1/pools?game=hkrpg&lang=zh-cn&ids=2003');
-  assert.equal((await pool.json()).pools.length, 1);
+  assert.equal((await item('hkrpg', '1001')).items.length, 1);
 });
 
 test('JSON expansion supports updates beyond D1 SQL parameter limits', async () => {

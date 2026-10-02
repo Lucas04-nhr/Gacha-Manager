@@ -5,7 +5,8 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { metadataSql } from '../scripts/metadata-sql.mjs';
 
 const fixture = JSON.parse(await readFile(new URL('./fixtures/metadata.json', import.meta.url), 'utf8'));
-const migration = await readFile(new URL('../migrations/0001_metadata.sql', import.meta.url), 'utf8');
+fixture.entries = fixture.entries.filter(row => row.kind === 'item');
+const migration = (await Promise.all(['0001_metadata.sql', '0002_item_details.sql'].map(file => readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')))).join('\n');
 let mf;
 let db;
 const options = { modules: true, scriptPath: 'dist/index.js', compatibilityDate: '2026-10-02', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'test-gacha' }, bindings: { ALLOWED_ORIGINS: '*' } };
@@ -56,14 +57,8 @@ test('ZZZ original rank is distinct from display rarity', async () => {
   assert.equal((await data('/api/v1/items?game=hkrpg&lang=zh-cn&ids=1001')).items[0].rarity, 4);
 });
 
-test('pool IDs and item IDs do not collide and pools isolate all four namespaces', async () => {
-  const normal = await data('/api/v1/pools?game=hk4e&lang=zh-cn&ids=10000003');
-  assert.equal(normal.pools[0].gacha_type, '301');
-  assert.equal(normal.pools[0].pool_id, '10000003');
-  assert.equal(normal.pools[0].item_id, undefined);
-  for (const [game, type] of [['hkrpg', '11'], ['nap', '2'], ['hk4e_ugc', '20011']]) {
-    assert.equal((await data(`/api/v1/pools?game=${game}&lang=zh-cn&ids=2003`)).pools[0].gacha_type, type);
-  }
+test('pool schedule endpoint is outside scope', async () => {
+  assert.equal((await request('/api/v1/pools?game=hk4e&ids=1')).status, 404);
 });
 
 test('bounded batch query supports exactly 90 IDs', async () => {
@@ -133,7 +128,7 @@ test('operator upserts retain historical rows and safely escape names', async ()
   await db.prepare(sql.split('\n').find(line => line.startsWith('INSERT'))).run();
   assert.equal((await data('/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003')).items[0].name, "Jean's name; not SQL");
   assert.equal((await data('/api/v1/items?game=hk4e&lang=en-us&ids=10000003')).items[0].name, 'Jean');
-  assert.equal((await data('/api/v1/pools?game=hkrpg&lang=zh-cn&ids=2003')).pools.length, 1);
+  assert.equal((await data('/api/v1/items?game=hkrpg&lang=zh-cn&ids=1001')).items.length, 1);
 });
 
 test('operator input refuses user data, numeric IDs, duplicate keys and invalid ranks', () => {

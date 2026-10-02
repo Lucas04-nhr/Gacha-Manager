@@ -5,7 +5,7 @@ import { syncMetadata, updateRequest, UpdateError } from './update';
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
 const maxIds = catalog.max_ids;
-const paths = ['/', '/api/v1/health', '/api/v1/games', '/api/v1/items', '/api/v1/pools'];
+const paths = ['/', '/api/v1/health', '/api/v1/games', '/api/v1/items'];
 
 interface MetadataRow {
   entity_id: string;
@@ -28,14 +28,6 @@ interface PublicItem {
   rank: number | null;
   type: string | null;
   icon: string | null;
-  source: string;
-  updated_at: string;
-}
-
-interface PublicPool {
-  pool_id: string;
-  name: string;
-  gacha_type: string | null;
   source: string;
   updated_at: string;
 }
@@ -100,29 +92,25 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
     fail(400, 'INVALID_IDS', `ids must contain 1–${maxIds} comma-separated decimal strings, each at most 20 digits.`);
   }
   const ids = [...new Set(rawIds)];
-  const kind = path === '/api/v1/items' ? 'item' : 'pool';
+  const kind = 'item';
   // Only this static allowlist selects SQL table names; all request values are bound.
   const table = catalog.games[game as keyof typeof catalog.games];
   const result = await env.DB.prepare(
     `SELECT entity_id, name, item_type, rank_type, gacha_type, source, updated_at, item_category, icon FROM ${table} WHERE namespace = ? AND kind = ? AND lang = ? AND entity_id IN (${ids.map(() => '?').join(',')})`,
   ).bind(game, kind, lang, ...ids).all<MetadataRow>();
   const byId = new Map(result.results.map(item => [item.entity_id, item]));
-  const entries = ids.flatMap<PublicItem | PublicPool>(id => {
+  const entries = ids.flatMap<PublicItem>(id => {
     const item = byId.get(id);
     if (!item) return [];
     const common = { name: item.name, source: item.source, updated_at: item.updated_at };
-    const rank = game === 'hk4e_ugc' ? null : Number(item.rank_type) + (game === 'nap' ? 1 : 0);
-    return kind === 'item'
-      ? [{ item_id: id, ...common, item_type: item.item_type, rank_type: item.rank_type,
-        rarity: rank, rank, type: item.item_category, icon: item.icon }]
-      : [{ pool_id: id, ...common, gacha_type: item.gacha_type }];
+    const rawRank = Number(item.rank_type);
+    const rank = game === 'hk4e_ugc' ? (rawRank >= 1 && rawRank <= 5 ? rawRank : null) : rawRank + (game === 'nap' ? 1 : 0);
+    return [{ item_id: id, ...common, item_type: item.item_type, rank_type: item.rank_type,
+      rarity: rank, rank, type: item.item_category, icon: item.icon }];
   });
   // No default names or rarity for missing data, and no implicit language fallback.
-  const data = kind === 'item' ? Object.fromEntries(entries.map(entry => {
-    const item = entry as PublicItem;
-    return [item.item_id, { name: item.name, rank: item.rank, type: item.type, icon: item.icon }];
-  })) : undefined;
-  return json({ game, lang, [kind === 'item' ? 'items' : 'pools']: entries, data, missing_ids: ids.filter(id => !byId.has(id)) }, 200, 'public, max-age=300');
+  const data = Object.fromEntries(entries.map(item => [item.item_id, { name: item.name, rank: item.rank, type: item.type, icon: item.icon }]));
+  return json({ game, lang, items: entries, data, missing_ids: ids.filter(id => !byId.has(id)) }, 200, 'public, max-age=300');
 }
 
 export default {
@@ -141,7 +129,7 @@ export default {
         response = await updateRequest(request, env);
       } else if (request.method === 'OPTIONS') {
         if (!paths.includes(url.pathname)) fail(404, 'NOT_FOUND', 'Endpoint not found.');
-        query(url, ['/api/v1/items', '/api/v1/pools'].includes(url.pathname) ? ['game', 'lang', 'ids'] : []);
+        query(url, ['/api/v1/items'].includes(url.pathname) ? ['game', 'lang', 'ids'] : []);
         const method = request.headers.get('Access-Control-Request-Method');
         const headers = request.headers.get('Access-Control-Request-Headers');
         if ((method && !['GET', 'HEAD'].includes(method)) || headers) {
