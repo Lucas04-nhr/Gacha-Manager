@@ -2,13 +2,15 @@
 
 ## Scope and privacy
 
-This repository is a Cloudflare Workers backend for **public gacha item and pool metadata queries only**. The blog frontend owns UIGF file parsing, import/export, record storage, statistics, display and incremental history fetching. Do not implement those features here.
+This repository is a Cloudflare Workers backend for **public gacha item and pool metadata queries and maintenance only**. The blog frontend owns UIGF file parsing, import/export, record storage, statistics, display and incremental history fetching. Do not implement those features here.
 
-Never accept, store or log player UIDs, account identifiers, cookies, authkeys, user gacha records, uploaded archives or history URLs. Do not introduce account systems, history proxies, user-storage bindings or a public metadata write endpoint. API callers send only namespace, language and public item/pool IDs. Platform request logging still exists; do not describe the service as having no logs whatsoever.
+Never accept, store or log player UIDs, account identifiers, cookies, authkeys, user gacha records, uploaded archives or history URLs. Do not introduce account systems, history proxies, user-storage bindings or unauthenticated metadata writes. Blog API callers send only namespace, language and public item/pool IDs. Operator POST updates require the `METADATA_UPDATE_TOKEN` secret and normalized public metadata, and must reject browser origins. Never embed this operator token in the blog frontend. Platform request logging still exists; do not describe the service as having no logs whatsoever.
 
 ## Architecture
 
-- `src/index.ts`: read-only HTTP routing, validation, CORS and D1 queries.
+- `src/index.ts`: HTTP routing, validation, CORS, D1 queries and scheduled entry point.
+- `src/update.ts`: authenticated operator updates and deployment-configured scheduled feed synchronization.
+- `src/metadata.mjs` and `src/metadata.d.mts`: shared metadata validation for Worker and offline operator tool, and its type contract. Keep them consistent.
 - `src/catalog.json`: namespace-to-table allowlist, languages and query limits, shared with the operator tool.
 - `src/page.ts`: static API documentation at `/`; no user-data input forms.
 - `migrations/`: versioned D1 schema; do not edit a migration already applied to a shared database.
@@ -34,6 +36,8 @@ Each table distinguishes `kind=item` and `kind=pool`. The primary key is `(names
 Keep IDs and `rank_type` as strings. Ordinary Genshin and Star Rail raw ranks are 3/4/5. ZZZ raw ranks are 2/3/4, with display `rarity` equal to the raw rank plus one. Preserve outfit ranks as decimal strings; return `rarity: null` until a verified display mapping exists. Never fabricate rarity, names, types or pool identities. Unknown IDs return in `missing_ids`; language queries do not silently fall back. Preserve historical pool metadata during updates.
 
 Keep SQL table names exclusively in the static catalog allowlist and bind every request value using prepared statements. Bound query size must remain below D1's SQL parameter limit, including namespace/kind/language parameters. Reject unknown or repeated query parameters. Queries are GET/HEAD, with OPTIONS for CORS. Do not enable credentialed CORS. Origin restrictions are browser controls, not authentication.
+
+Updates use a single D1 batch across affected tables, after full validation. JSON expansion bounds SQL parameters even for large payloads. Enforce 1 MiB/2000-entry HTTP and feed limits. Do not delete rows absent from a feed. Cron fetch URLs are deployment-controlled `METADATA_FEEDS`, never request-provided. Do not follow redirects, forward operator credentials or log payloads, feed URLs, tokens or raw errors. Attempt all configured feeds and report any failure to the scheduled runtime; each feed is atomic, multiple feeds are independent. Empty feeds disable sync. Metadata producers must normalize upstream data to the documented schema; do not claim automatic coverage of all raw upstream APIs.
 
 ## Implementation and verification
 
