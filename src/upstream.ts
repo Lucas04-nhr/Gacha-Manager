@@ -73,36 +73,32 @@ async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectDa
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
   const result: ObjectData = {};
-  let state: 'start' | 'key' | 'colon' | 'value' | 'comma' | 'next' | 'end' = 'start';
-  let token = '';
-  let quoted = false;
-  let escaped = false;
-  let currentKey = '';
+  const remaining = new Set(wanted);
   let bytes = 0;
-  function complete(): boolean { return state === 'end' && !quoted; }
+  let buffer = '';
+  let started = false;
+  let lastCharacter = '';
   function consume(input: string): void {
-    for (const char of input) {
-      if (quoted) {
-        token += char;
-        if (token.length > 256 * 1024) throw new Error('Fallback string too long');
-        if (escaped) { escaped = false; continue; }
-        if (char === '\\') { escaped = true; continue; }
-        if (char !== '"') continue;
-        const value: unknown = JSON.parse(token);
-        if (typeof value !== 'string') throw new Error('Invalid fallback string');
-        quoted = false; token = '';
-        if (state === 'key' || state === 'next') { currentKey = value; state = 'colon'; }
-        else { if (wanted.has(currentKey)) result[currentKey] = value; state = 'comma'; }
-        continue;
-      }
-      if (/[ \t\r\n]/.test(char)) continue;
-      if ((state === 'key' || state === 'next' || state === 'value') && char === '"') { token = char; quoted = true; continue; }
-      if (state === 'start' && char === '{') state = 'key';
-      else if (state === 'colon' && char === ':') state = 'value';
-      else if (state === 'comma' && char === ',') state = 'next';
-      else if ((state === 'comma' || state === 'key') && char === '}') state = 'end';
-      else throw new Error('Invalid flat localization map');
+    if (!started && input.trim()) {
+      if (!input.trimStart().startsWith('{')) throw new Error('Invalid localization map');
+      started = true;
     }
+    if (input.trim()) lastCharacter = input.trimEnd().slice(-1);
+    buffer += input;
+    for (const hash of remaining) {
+      const quotedKey = JSON.stringify(hash);
+      const offset = buffer.indexOf(quotedKey);
+      if (offset < 0) continue;
+      const match = /^\s*:\s*("(?:\\.|[^"\\])*")/.exec(buffer.slice(offset + quotedKey.length));
+      if (!match) continue; // Key/value may span network chunks.
+      const value: unknown = JSON.parse(match[1] ?? 'null');
+      if (typeof value !== 'string') throw new Error('Invalid localization value');
+      result[hash] = value;
+      remaining.delete(hash);
+    }
+    // Public item names are limited to 256 characters. This overlap is enough
+    // for escaped names and keys while keeping CPU and memory bounded.
+    buffer = buffer.slice(-8192);
   }
   try {
     while (true) {
@@ -111,9 +107,10 @@ async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectDa
       bytes += chunk.value.byteLength;
       if (bytes > 64 * 1024 * 1024) throw new Error('Fallback map too large');
       consume(decoder.decode(chunk.value, { stream: true }));
+      if (!remaining.size) return result;
     }
     consume(decoder.decode());
-    if (!complete()) throw new Error('Truncated fallback map');
+    if (!started || lastCharacter !== '}') throw new Error('Truncated localization map');
     return result;
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
