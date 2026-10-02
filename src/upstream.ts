@@ -65,6 +65,59 @@ async function download(url: string, limit = 1024 * 1024): Promise<unknown> {
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
+// Dimbreath text maps can exceed 45 MiB. Stream a flat string dictionary and
+// retain only requested hashes instead of materializing the whole map in RAM.
+async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectData> {
+  const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(20000) });
+  if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error('Fallback unavailable'); }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
+  const result: ObjectData = {};
+  let state: 'start' | 'key' | 'colon' | 'value' | 'comma' | 'next' | 'end' = 'start';
+  let token = '';
+  let quoted = false;
+  let escaped = false;
+  let currentKey = '';
+  let bytes = 0;
+  function complete(): boolean { return state === 'end' && !quoted; }
+  function consume(input: string): void {
+    for (const char of input) {
+      if (quoted) {
+        token += char;
+        if (token.length > 256 * 1024) throw new Error('Fallback string too long');
+        if (escaped) { escaped = false; continue; }
+        if (char === '\\') { escaped = true; continue; }
+        if (char !== '"') continue;
+        const value: unknown = JSON.parse(token);
+        if (typeof value !== 'string') throw new Error('Invalid fallback string');
+        quoted = false; token = '';
+        if (state === 'key' || state === 'next') { currentKey = value; state = 'colon'; }
+        else { if (wanted.has(currentKey)) result[currentKey] = value; state = 'comma'; }
+        continue;
+      }
+      if (/[ \t\r\n]/.test(char)) continue;
+      if ((state === 'key' || state === 'next' || state === 'value') && char === '"') { token = char; quoted = true; continue; }
+      if (state === 'start' && char === '{') state = 'key';
+      else if (state === 'colon' && char === ':') state = 'value';
+      else if (state === 'comma' && char === ',') state = 'next';
+      else if ((state === 'comma' || state === 'key') && char === '}') state = 'end';
+      else throw new Error('Invalid flat localization map');
+    }
+  }
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > 64 * 1024 * 1024) throw new Error('Fallback map too large');
+      consume(decoder.decode(chunk.value, { stream: true }));
+    }
+    consume(decoder.decode());
+    if (!complete()) throw new Error('Truncated fallback map');
+    return result;
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+}
+
 export function enkaItems(game: Game, avatars: unknown, weapons: unknown, localization: unknown, lang: string): Candidate[] {
   const locale = languages[lang];
   if (!locale) throw new Error('Unsupported upstream language');
@@ -110,11 +163,11 @@ async function supplement(game: Game, lang: string, rows: Candidate[]): Promise<
   const configs = new Map<string, ObjectData>();
   if (game === 'nap') {
     const suffix = code === 'CHS' ? '' : `_${code === 'JP' ? 'JA' : code === 'KR' ? 'KO' : code}`;
-    loc = object(await download(`${dimbreath.nap}/TextMap/TextMap${suffix}TemplateTb.json`, 16 * 1024 * 1024));
+    loc = await downloadNames(`${dimbreath.nap}/TextMap/TextMap${suffix}TemplateTb.json`, new Set(missing.flatMap(row => row.nameKey ? [row.nameKey] : [])));
   } else {
     const files: Record<string, string | undefined> = game === 'hk4e' ? { character: 'ExcelBinOutput/AvatarExcelConfigData.json', weapon: 'ExcelBinOutput/WeaponExcelConfigData.json' }
       : { character: 'ExcelOutput/AvatarConfig.json', light_cone: 'ExcelOutput/EquipmentConfig.json' };
-    for (const type of new Set(missing.map(row => row.type))) {
+    for (const type of new Set(missing.filter(row => row.rank === undefined || !row.icon || !row.nameKey).map(row => row.type))) {
       const path = files[type];
       if (!path) throw new Error('Unknown fallback type');
       const values = await download(`${dimbreath[game]}/${path}`, 8 * 1024 * 1024);
@@ -125,11 +178,18 @@ async function supplement(game: Game, lang: string, rows: Candidate[]): Promise<
         if (id) configs.set(`${type}:${id}`, data);
       }
     }
-    loc = object(await download(`${dimbreath[game]}/TextMap/TextMap${code}.json`, 16 * 1024 * 1024));
+    const hashes = missing.flatMap(row => {
+      const data = configs.get(`${row.type}:${row.id}`);
+      const reference = data && game === 'hkrpg' ? (row.type === 'character' ? data.AvatarName : data.EquipmentName) : undefined;
+      const hash = data && game === 'hk4e' ? key(data.nameTextMapHash) : reference ? key(object(reference).Hash) : row.nameKey;
+      return hash ? [hash] : [];
+    });
+    loc = await downloadNames(`${dimbreath[game]}/TextMap/TextMap${code}.json`, new Set(hashes));
   }
   let count = 0;
-  const completed = rows.map(row => {
-    if (!missing.includes(row)) return row;
+  let unresolved = 0;
+  const completed = rows.flatMap(row => {
+    if (!missing.includes(row)) return [row];
     const data = configs.get(`${row.type}:${row.id}`);
     let hash = row.nameKey;
     let fallbackRank: number | undefined;
@@ -148,10 +208,11 @@ async function supplement(game: Game, lang: string, rows: Candidate[]): Promise<
       fallbackIcon = path ? `https://enka.network/ui/hsr/${path.replace(/^\/?ui\/hsr\//, '').replace(/^\//, '')}` : undefined;
     }
     const result = { ...row, name: row.name ?? name(loc, hash), rank: row.rank ?? fallbackRank, icon: row.icon ?? fallbackIcon };
-    if (!result.name || result.rank === undefined || !result.icon) throw new Error('Fallback cannot complete required fields');
+    if (!result.name || result.rank === undefined || !result.icon) { unresolved += 1; return []; }
     count += 1;
-    return result;
+    return [result];
   });
+  if (unresolved) console.log(JSON.stringify({ event: 'metadata_unresolved', game, lang, items: unresolved }));
   return { rows: completed, count };
 }
 
@@ -174,14 +235,13 @@ export function starwardItems(input: unknown, game: 'nap' | 'hk4e_ugc', lang: st
     const row = object(value);
     const id = key(game === 'nap' ? row.id : row.Id);
     if (!id || !/^\d+$/.test(id)) throw new Error('Invalid Starward ID');
-    // Starward's public ZZZ list groups agents (1xxxx), engines (1xxxx/2xxxx)
-    // and buddies (5xxxx). Only import the verified buddy range here.
     if (game === 'nap' && !/^5\d{4}$/.test(id)) return [];
     const rank = game === 'nap' ? row.rarity : row.Rank;
     if (typeof rank !== 'number' || !Number.isInteger(rank) || !(game === 'nap' ? [2, 3, 4] : [0, 1, 2, 3, 4, 5]).includes(rank)) throw new Error('Invalid Starward rank');
     const title = text(game === 'nap' ? row.name : row.Name);
     const image = icon(game === 'nap' ? row.icon : row.Icon);
-    if (!title || !image) throw new Error('Incomplete Starward metadata');
+    if (!title) return []; // Upstream contains unnamed/unreleased entries; never invent names.
+    if (!image) throw new Error('Incomplete Starward icon');
     const type = game === 'nap' ? 'bangboo' : 'ugc_item';
     return [{ game, lang, kind: 'item', item_id: id, name: title, rank_type: String(rank), item_type: type, type, icon: image }];
   });

@@ -88,7 +88,17 @@ export async function updateRequest(request: Request, env: Env): Promise<Respons
     throw new UpdateError(401, 'UNAUTHORIZED', 'A valid metadata update Bearer token is required.');
   }
   if (new URL(request.url).pathname === '/api/v1/admin/sync') {
-    if (request.body) throw new UpdateError(400, 'INVALID_BODY', 'Sync accepts no request body. Configure sources at deployment.');
+    // workerd may expose an empty stream for a POST with no payload.
+    if (request.body) {
+      const reader = request.body.getReader();
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          if (chunk.value.byteLength) throw new UpdateError(400, 'INVALID_BODY', 'Sync accepts no request body. Configure sources at deployment.');
+        }
+      } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    }
     return Response.json(await syncMetadata(env), { headers: { 'Cache-Control': 'no-store' } });
   }
   if (request.headers.has('Content-Encoding')) throw new UpdateError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Encoded request bodies are not supported.');

@@ -163,3 +163,50 @@ test('cron rejects redirects and invalid metadata without following or writing',
     assert.deepEqual((await query.json()).missing_ids, ['10000003']);
   } finally { await cron.dispose(); }
 });
+
+test('authenticated sync fetches processed stores and special feeds into unified D1 API', async () => {
+  const bodies = {
+    '/store/gi/avatars.json': { 10000002: { NameTextMapHash: 123, QualityType: 'QUALITY_ORANGE', SideIconName: '/ui/Ayaka.png' } },
+    '/store/gi/weapons.json': { 11401: { NameTextMapHash: 456, Rarity: 4, Icon: '/ui/Sword.png' } },
+    '/store/gi/locs.json': { en: { 123: 'Ayaka', 456: 'Sword' } },
+    '/store/hsr/avatars.json': { 1001: { AvatarName: { Hash: '6186714091647966180' }, Rarity: 4, AvatarSideIconPath: '/ui/hsr/March.png' } },
+    '/store/hsr/weapons.json': { 20000: { EquipmentName: { Hash: '2' }, Rarity: 3, ImagePath: '/ui/hsr/Arrow.png' } },
+    '/store/hsr/hsr.json': { en: { '6186714091647966180': 'March 7th', 2: 'Arrow' } },
+    '/store/zzz/avatars.json': { 1011: { Name: 'agent', Rarity: 3, Image: '/ui/zzz/agent.png' } },
+    '/store/zzz/weapons.json': { 12001: { ItemName: 'engine', Rarity: 2, ImagePath: '/ui/zzz/engine.png' } },
+    '/store/zzz/locs.json': { en: { agent: 'Anby', engine: 'Engine' } },
+    '/ZZZGachaInfo.nap_global.en-us.json': { retcode: 0, data: { game: 'nap', lang: 'en-us', list: [
+      { id: 1011, name: 'must not overwrite Enka', rarity: 3, icon: 'https://example.com/agent.png' },
+      { id: 54001, name: 'Buddy', rarity: 4, icon: 'https://example.com/buddy.png' },
+    ] } },
+    '/GenshinBeyondGachaInfo.json': [{ Id: 260001, Name: '衣装', Rank: 2, Icon: 'https://example.com/outfit.png' }, { Id: 260002, Name: '', Rank: 2, Icon: 'https://example.com/unknown.png' }],
+  };
+  const calls = [];
+  const sync = new Miniflare(convertV4MiniflareOptions({ ...options,
+    bindings: { ...options.bindings, UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' },
+    outboundService: async request => {
+      assert.equal(request.headers.get('Authorization'), null);
+      assert.equal(request.headers.get('Cookie'), null);
+      calls.push(request.url);
+      const entry = Object.entries(bodies).find(([suffix]) => new URL(request.url).pathname.endsWith(suffix));
+      assert.ok(entry, 'fetch destinations must be the configured public metadata sources');
+      return Response.json(entry[1]);
+    },
+  }));
+  try {
+    await migrate(sync);
+    assert.equal((await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST' })).status, 401);
+    const response = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { updated: 8, sources: 5 });
+    assert.equal(calls.length, 11);
+    assert.equal(calls.some(url => url.includes('Dimbreath')), false);
+    const query = async (game, ids, lang = 'en-us') => (await sync.dispatchFetch(`https://worker.test/api/v1/items?game=${game}&lang=${lang}&ids=${ids}`)).json();
+    const zzz = await query('nap', '1011,54001');
+    assert.equal(zzz.data['1011'].name, 'Anby');
+    assert.deepEqual(zzz.data['54001'], { name: 'Buddy', rank: 5, type: 'bangboo', icon: 'https://example.com/buddy.png' });
+    assert.equal((await query('hk4e_ugc', '260001', 'zh-cn')).data['260001'].rank, 2);
+    assert.deepEqual((await query('hk4e_ugc', '260001')).missing_ids, ['260001']);
+    assert.deepEqual((await query('hk4e_ugc', '260002', 'zh-cn')).missing_ids, ['260002']);
+  } finally { await sync.dispose(); }
+});
