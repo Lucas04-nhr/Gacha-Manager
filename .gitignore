@@ -1,0 +1,15 @@
+# TypeScript
+node_modules/
+dist/
+
+# Wrangler
+.wrangler/
+.dev.vars*
+.env*
+
+# Local development
+*metadata.sql
+
+# macOS Resources
+.DS_Store
+._*

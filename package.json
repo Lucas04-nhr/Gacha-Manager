@@ -1,0 +1,23 @@
+{
+  "name": "gacha-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types",
+    "check": "tsc --noEmit",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply gacha_meta --local",
+    "db:migrate:remote": "wrangler d1 migrations apply gacha_meta --remote",
+    "metadata:sql": "node scripts/metadata-sql.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "miniflare": "^5.20261001.0-alpha",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.147.0"
+  }
+}

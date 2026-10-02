@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gacha-manager",
+  "main": "src/index.ts",
+  "account_id": "2a190a563d8c90115322b4931de73d5c",
+  "compatibility_date": "2026-10-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGINS": "*"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gacha_meta",
+      "database_id": "2ad55df3-3dbb-404b-9eae-a2543ea4dfe7",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
+}
