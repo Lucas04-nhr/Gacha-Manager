@@ -67,12 +67,12 @@ Open `http://localhost:8787/` for the plain-text welcome message and documentati
 
 Public queries support `GET`, `HEAD` and `OPTIONS`, without authentication, cookies or user request bodies. Only the documented query parameters are allowed, and each parameter may appear once.
 
-| Path                                                    | Purpose                                                                         |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `/`                                                     | Plain-text welcome message linking to https://blog.lucas04.top/docs/gacha-meta/ |
-| `/api/v1/health`                                        | Check that all four business tables can be queried                              |
-| `/api/v1/games`                                         | Supported games, languages, default language and query limit                    |
-| `/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003,11401` | Batch lookup by item ID                                                         |
+| Path                                                    | Purpose                                                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `/`                                                     | Plain-text welcome message linking to https://blog.lucas04.top/docs/gacha-manager/backend/ |
+| `/api/v1/health`                                        | Check that all four business tables can be queried                                         |
+| `/api/v1/games`                                         | Supported games, languages, default language and query limit                               |
+| `/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003,11401` | Batch lookup by item ID                                                                    |
 
 `game` is required. `lang` defaults to `en-us`. `ids` is required and contains 1–90 decimal string IDs, each up to 20 digits. The service deduplicates IDs and returns results in request order. It does not fall back to another language.
 
@@ -213,4 +213,22 @@ npm run db:migrate:remote
 npm run deploy
 ```
 
-The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-meta/. After deployment, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
+The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
+
+## Acknowledgements
+
+Thank you to the maintainers and contributors of the following projects for the public data and implementation references that made this service possible.
+
+### Data sources
+
+- [Enka.Network API documentation and processed stores](https://github.com/EnkaNetwork/API-docs): the primary source of character and equipment metadata, localizations and icon paths for Genshin Impact, Honkai: Star Rail and Zenless Zone Zero.
+- Dimbreath's [AnimeGameData2](https://gitlab.com/Dimbreath/animegamedata2), [TurnBasedGameData](https://gitlab.com/Dimbreath/turnbasedgamedata) and [ZenlessData](https://git.mero.moe/Dimbreath/ZenlessData): configuration files and text maps used to supplement missing Enka fields.
+- [Starward](https://github.com/Scighost/Starward), by Scighost and contributors: public static metadata for Bangboo and Miliastra Wonderland outfits, and reference implementations for maintaining these special item categories.
+
+### Inspiration and standards
+
+- [PizzaHelperUnited](https://github.com/pizza-studio/PizzaHelperUnited) and [GachaMetaGenerator](https://github.com/pizza-studio/GachaMetaGenerator), by pizza-studio and contributors: references for gacha metadata organization and generation workflows.
+- [hoyo-buddy](https://github.com/seriaati/hoyo-buddy), by seriaati and contributors: a reference for HoYoverse game integrations and gacha data handling.
+- [UIGF](https://uigf.org/en/standards/uigf.html): the standard informing this service's game namespaces and raw item field semantics.
+
+The runtime data sources are listed separately from projects consulted for inspiration. This Worker implements its own public metadata API; user record management remains the responsibility of the frontend.
