@@ -2,13 +2,13 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "gacha-manager",
   "main": "src/index.ts",
-  "account_id": "2a190a563d8c90115322b4931de73d5c",
+  "account_id": "YOUR_ACCOUNT_ID",
   "compatibility_date": "2026-10-02",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
-  "routes": [{ "pattern": "gachameta.lucas04.top", "custom_domain": true }],
+  "routes": [{ "pattern": "YOUR_CUSTOM_DOMAIN", "custom_domain": true }],
   "vars": {
-    "ALLOWED_ORIGINS": "*.lucas04.top",
+    "ALLOWED_ORIGINS": "*",
     "METADATA_FEEDS": "[]",
     "UPSTREAM_SYNC_ENABLED": "true",
     "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]"
