@@ -18,4 +18,6 @@ export const apiPage = `<!doctype html>
 <p>rank_type 保留游戏原始值；rarity 为展示星级。绝区零 rank_type 为 2/3/4，对应 rarity 3/4/5。千星衣装 rank_type 保留原始等级，rarity 返回 null。item_type 是元数据维护者提供的本地化类型文本。</p>
 <p>错误返回 { "error": { "code": "…", "message": "…" } }。400 参数错误、403 来源不允许、404 路径不存在、405 方法不支持、414 查询过长、503 数据库不可用。</p>
 <p>卡池返回 pools 数组，字段为 pool_id、name、gacha_type、source、updated_at。pool_id 对应星铁和绝区零的 gacha_id、千星衣装的 schedule_id；gacha_type 为卡池类别（千星为 op_gacha_type），两者不同。
-</p><p>本 API 只支持 GET、HEAD、OPTIONS，不提供写入端点。前端应使用 credentials: "omit"，仅发送游戏、语言和公共物品 ID。</p></main></html>`;
+</p><p>公共查询支持 GET、HEAD、OPTIONS。博客前端应使用 credentials: "omit"，仅发送游戏、语言和公共物品／卡池 ID。</p>
+<p>管理员维护：POST /api/v1/admin/metadata，需 Authorization: Bearer 管理密钥及 application/json，使用 README 中的 source/entries 格式。仅供维护脚本调用，不允许浏览器 Origin；不要把密钥放入博客。每次最多 2000 行、1 MiB，校验后跨表原子 upsert，不删除历史数据。</p>
+<p>定时更新每天 UTC 03:00 从部署配置 METADATA_FEEDS 的公共规范化 JSON 源拉取。默认源列表为空；具体配置见 README。</p></main></html>`;

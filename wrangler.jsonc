@@ -7,7 +7,14 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "vars": {
-    "ALLOWED_ORIGINS": "*"
+    "ALLOWED_ORIGINS": "*",
+    "METADATA_FEEDS": "[]"
+  },
+  "secrets": {
+    "required": ["METADATA_UPDATE_TOKEN"]
+  },
+  "triggers": {
+    "crons": ["0 3 * * *"]
   },
   "d1_databases": [
     {

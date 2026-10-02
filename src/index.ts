@@ -1,5 +1,6 @@
 import { apiPage } from './page';
 import catalog from './catalog.json';
+import { syncMetadata, updateRequest, UpdateError } from './update';
 
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
@@ -125,7 +126,10 @@ export default {
       if (!allowed) fail(403, 'ORIGIN_NOT_ALLOWED', 'Origin is not allowed.');
       const url = new URL(request.url);
       if (url.search.length > 4096) fail(414, 'QUERY_TOO_LONG', 'Query is too long.');
-      if (request.method === 'OPTIONS') {
+      if (url.pathname === '/api/v1/admin/metadata') {
+        query(url, []);
+        response = await updateRequest(request, env);
+      } else if (request.method === 'OPTIONS') {
         if (!paths.includes(url.pathname)) fail(404, 'NOT_FOUND', 'Endpoint not found.');
         query(url, ['/api/v1/items', '/api/v1/pools'].includes(url.pathname) ? ['game', 'lang', 'ids'] : []);
         const method = request.headers.get('Access-Control-Request-Method');
@@ -138,7 +142,7 @@ export default {
         response = await route(request, env, url);
       }
     } catch (error) {
-      if (error instanceof HttpError) {
+      if (error instanceof HttpError || error instanceof UpdateError) {
         response = json({ error: { code: error.code, message: error.message } }, error.status);
       } else {
         // Do not log URLs, SQL parameters, headers or request bodies.
@@ -149,13 +153,18 @@ export default {
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Vary', 'Origin');
-    if (allowed) {
+    const admin = new URL(request.url).pathname === '/api/v1/admin/metadata';
+    if (allowed && !admin) {
       if (wildcard) response.headers.set('Access-Control-Allow-Origin', '*');
       else if (origin) response.headers.set('Access-Control-Allow-Origin', origin);
       response.headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
       response.headers.set('Access-Control-Max-Age', '86400');
     }
-    if (response.status === 405) response.headers.set('Allow', 'GET, HEAD, OPTIONS');
+    if (response.status === 405) response.headers.set('Allow', admin ? 'POST' : 'GET, HEAD, OPTIONS');
+    if (response.status === 401) response.headers.set('WWW-Authenticate', 'Bearer');
     return request.method === 'HEAD' ? new Response(null, response) : response;
+  },
+  async scheduled(_controller, env): Promise<void> {
+    await syncMetadata(env);
   },
 } satisfies ExportedHandler<Env>;
