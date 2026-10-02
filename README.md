@@ -232,3 +232,7 @@ Thank you to the maintainers and contributors of the following projects for the 
 - [UIGF](https://uigf.org/en/standards/uigf.html): the standard informing this service's game namespaces and raw item field semantics.
 
 The runtime data sources are listed separately from projects consulted for inspiration. This Worker implements its own public metadata API; user record management remains the responsibility of the frontend.
+
+## License
+
+The Gacha Metadata API is licensed under the [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html). The public data sources are subject to their own licenses and terms of use, which may differ from this repository's license. Using the public data sources might require additional attribution or compliance with their respective licenses. 
