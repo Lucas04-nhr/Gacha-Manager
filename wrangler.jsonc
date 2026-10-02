@@ -6,6 +6,7 @@
   "compatibility_date": "2026-10-02",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "routes": [{ "pattern": "gachameta.lucas04.top", "custom_domain": true }],
   "vars": {
     "ALLOWED_ORIGINS": "*",
     "METADATA_FEEDS": "[]",

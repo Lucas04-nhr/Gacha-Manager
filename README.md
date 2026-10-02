@@ -35,20 +35,20 @@ These public sources change over time and do not guarantee coverage of every gac
 
 `wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. No new database, KV, R2 or Durable Objects are required.
 
-| `game` | Separate D1 table | Content |
-| --- | --- | --- |
-| `hk4e` | `genshin_meta` | Genshin Impact characters and weapons |
-| `hkrpg` | `starrail_meta` | Honkai: Star Rail characters and Light Cones |
-| `nap` | `zenless_meta` | ZZZ agents, W-Engines and Bangboo |
-| `hk4e_ugc` | `genshin_ugc_meta` | Miliastra outfits and related rewards |
+| `game`     | Separate D1 table  | Content                                      |
+| ---------- | ------------------ | -------------------------------------------- |
+| `hk4e`     | `genshin_meta`     | Genshin Impact characters and weapons        |
+| `hkrpg`    | `starrail_meta`    | Honkai: Star Rail characters and Light Cones |
+| `nap`      | `zenless_meta`     | ZZZ agents, W-Engines and Bangboo            |
+| `hk4e_ugc` | `genshin_ugc_meta` | Miliastra outfits and related rewards        |
 
-The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is currently maintained. Historical `pool` fields from the initial migration remain for compatibility with existing databases. The API neither queries nor writes banner schedules; `/api/v1/pools` returns 404. Migration `0002_item_details.sql` adds unified type and icon fields. Apply all migrations before deployment.
+The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is currently maintained. Migration `0003_remove_gacha_type.sql` removes the unused `gacha_type` column and restricts rows to items while preserving existing metadata. The API neither queries nor writes banner schedules; `/api/v1/pools` returns 404. Migration `0002_item_details.sql` adds unified type and icon fields. Apply all migrations before deployment.
 
 `ALLOWED_ORIGINS` defaults to `*` and can be changed to a comma-separated list of complete blog origins. Public API requests omit credentials; CORS origin restrictions are not authentication. The admin API uses the separate secret `METADATA_UPDATE_TOKEN`, which must never be included in the blog frontend.
 
 ## Local development
 
-All Wrangler commands and npm scripts use the Homebrew-installed `/opt/homebrew/bin/wrangler`.
+All Wrangler commands and npm scripts use the Homebrew-installed `wrangler`.
 
 Requires Node.js 22.18+ (or a newer version supported by Wrangler) and npm.
 
@@ -61,18 +61,18 @@ npm run dev
 npm test
 ```
 
-Open `http://localhost:8787/` for the API documentation page. Development uses local D1 by default and does not modify the production database. Migrations do not populate metadata; empty tables correctly return `missing_ids`. `npm run build` performs a deployment dry run without publishing the Worker. Tests use local workerd/D1 and mocked upstream sources; test fixtures must not be used in production.
+Open `http://localhost:8787/` for the plain-text welcome message and documentation link. Development uses local D1 by default and does not modify the production database. Migrations do not populate metadata; empty tables correctly return `missing_ids`. `npm run build` performs a deployment dry run without publishing the Worker. Tests use local workerd/D1 and mocked upstream sources; test fixtures must not be used in production.
 
 ## Public query API
 
 Public queries support `GET`, `HEAD` and `OPTIONS`, without authentication, cookies or user request bodies. Only the documented query parameters are allowed, and each parameter may appear once.
 
-| Path | Purpose |
-| --- | --- |
-| `/` | API documentation page |
-| `/api/v1/health` | Check that all four business tables can be queried |
-| `/api/v1/games` | Supported games, languages, default language and query limit |
-| `/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003,11401` | Batch lookup by item ID |
+| Path                                                    | Purpose                                                                         |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `/`                                                     | Plain-text welcome message linking to https://blog.lucas04.top/docs/gacha-meta/ |
+| `/api/v1/health`                                        | Check that all four business tables can be queried                              |
+| `/api/v1/games`                                         | Supported games, languages, default language and query limit                    |
+| `/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003,11401` | Batch lookup by item ID                                                         |
 
 `game` is required. `lang` defaults to `en-us`. `ids` is required and contains 1–90 decimal string IDs, each up to 20 digits. The service deduplicates IDs and returns results in request order. It does not fall back to another language.
 
@@ -82,15 +82,27 @@ Example response (does not imply these entries have been imported):
 {
   "game": "hk4e",
   "lang": "zh-cn",
-  "items": [{
-    "item_id": "10000003", "name": "琴", "rank_type": "5",
-    "rarity": 5, "rank": 5, "type": "character", "item_type": "character",
-    "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png",
-    "source": "https://github.com/EnkaNetwork/API-docs/tree/master/store/gi",
-    "updated_at": "2026-10-02T03:00:00.000Z"
-  }],
+  "items": [
+    {
+      "item_id": "10000003",
+      "name": "琴",
+      "rank_type": "5",
+      "rarity": 5,
+      "rank": 5,
+      "type": "character",
+      "item_type": "character",
+      "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png",
+      "source": "https://github.com/EnkaNetwork/API-docs/tree/master/store/gi",
+      "updated_at": "2026-10-02T03:00:00.000Z"
+    }
+  ],
   "data": {
-    "10000003": { "name": "琴", "rank": 5, "type": "character", "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png" }
+    "10000003": {
+      "name": "琴",
+      "rank": 5,
+      "type": "character",
+      "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png"
+    }
   },
   "missing_ids": ["11401"]
 }
@@ -103,8 +115,14 @@ Example response (does not imply these entries have been imported):
 Missing IDs appear in `missing_ids`. A query with no matches still returns 200. Chinese outfit queries must explicitly use `lang=zh-cn`. Successful queries are cached for 300 seconds and configuration responses for 3600 seconds, so updates may briefly return cached results.
 
 ```js
-const params = new URLSearchParams({ game: 'hk4e_ugc', lang: 'zh-cn', ids: publicItemIds.join(',') });
-const response = await fetch(`${metadataApiBase}/api/v1/items?${params}`, { credentials: 'omit' });
+const params = new URLSearchParams({
+  game: "hk4e_ugc",
+  lang: "zh-cn",
+  ids: publicItemIds.join(","),
+});
+const response = await fetch(`${metadataApiBase}/api/v1/items?${params}`, {
+  credentials: "omit",
+});
 if (!response.ok) throw new Error(`Metadata API: ${response.status}`);
 const { data, missing_ids } = await response.json();
 ```
@@ -130,7 +148,7 @@ Each game/language task uses an independent transaction and preserves existing d
 Configure a random production secret of at least 32 characters:
 
 ```sh
-/opt/homebrew/bin/wrangler secret put METADATA_UPDATE_TOKEN
+wrangler secret put METADATA_UPDATE_TOKEN
 ```
 
 For local development, set the same variable in the ignored `.dev.vars` file. The admin API returns 503 if the secret is missing or its length is outside 32–512 characters. Public queries and Cron do not depend on this token. Admin endpoints are for maintainer scripts/CI only, require `Authorization: Bearer <token>`, reject all browser `Origin` headers and do not enable CORS. Never put real tokens in source code or command history.
@@ -143,11 +161,19 @@ Manual payload:
 ```json
 {
   "source": "https://example.com/public-metadata",
-  "entries": [{
-    "game": "hk4e", "lang": "en-us", "kind": "item", "item_id": "10000003",
-    "name": "Jean", "item_type": "character", "rank_type": "5", "type": "character",
-    "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png"
-  }]
+  "entries": [
+    {
+      "game": "hk4e",
+      "lang": "en-us",
+      "kind": "item",
+      "item_id": "10000003",
+      "name": "Jean",
+      "item_type": "character",
+      "rank_type": "5",
+      "type": "character",
+      "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png"
+    }
+  ]
 }
 ```
 
@@ -156,19 +182,23 @@ The source must be a public HTTPS URL without credentials, a query string or a f
 Example maintenance script (token injected through the environment):
 
 ```js
-const response = await fetch(`${process.env.GACHA_API_BASE}/api/v1/admin/sync`, {
-  method: 'POST', headers: { Authorization: `Bearer ${process.env.GACHA_ADMIN_TOKEN}` },
-});
+const response = await fetch(
+  `${process.env.GACHA_API_BASE}/api/v1/admin/sync`,
+  {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.GACHA_ADMIN_TOKEN}` },
+  },
+);
 if (!response.ok) throw new Error(`Sync failed: ${response.status}`);
 console.log(await response.json());
 ```
 
-For offline maintenance, run `npm run metadata:sql -- metadata.json metadata.sql` to validate metadata and generate SQL, then import it locally with `/opt/homebrew/bin/wrangler d1 execute gacha_meta --local --file metadata.sql`. The script does not access the network or overwrite an existing output file. Generated `/metadata.sql` at the repository root is ignored; migration and test sources remain under version control.
+For offline maintenance, run `npm run metadata:sql -- metadata.json metadata.sql` to validate metadata and generate SQL, then import it locally with `wrangler d1 execute gacha_meta --local --file metadata.sql`. The script does not access the network or overwrite an existing output file. Generated `/metadata.sql` at the repository root is ignored; migration and test sources remain under version control.
 
 Test Cron locally:
 
 ```sh
-/opt/homebrew/bin/wrangler dev --test-scheduled
+wrangler dev --test-scheduled
 curl 'http://localhost:8787/cdn-cgi/local/scheduled?cron=0+3+*+*+*'
 ```
 
@@ -177,10 +207,10 @@ curl 'http://localhost:8787/cdn-cgi/local/scheduled?cron=0+3+*+*+*'
 Source code and local verification do not imply that the Worker has been deployed or remote D1 has been modified. Maintainers can deploy with:
 
 ```sh
-/opt/homebrew/bin/wrangler login
-/opt/homebrew/bin/wrangler secret put METADATA_UPDATE_TOKEN
+wrangler login
+wrangler secret put METADATA_UPDATE_TOKEN
 npm run db:migrate:remote
 npm run deploy
 ```
 
-After deployment, visit `https://gacha-manager.<your-subdomain>.workers.dev/` for the documentation page, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
+The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-meta/. After deployment, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.

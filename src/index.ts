@@ -12,7 +12,6 @@ interface MetadataRow {
   name: string;
   item_type: string | null;
   rank_type: string | null;
-  gacha_type: string | null;
   source: string;
   updated_at: string;
   item_category: string | null;
@@ -65,9 +64,9 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   if (path === '/') {
     query(url, []);
     return new Response(apiPage, { headers: {
-      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'public, max-age=300',
-      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+      'Content-Security-Policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     } });
   }
   if (path === '/api/v1/health') {
@@ -96,7 +95,7 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   // Only this static allowlist selects SQL table names; all request values are bound.
   const table = catalog.games[game as keyof typeof catalog.games];
   const result = await env.DB.prepare(
-    `SELECT entity_id, name, item_type, rank_type, gacha_type, source, updated_at, item_category, icon FROM ${table} WHERE namespace = ? AND kind = ? AND lang = ? AND entity_id IN (${ids.map(() => '?').join(',')})`,
+    `SELECT entity_id, name, item_type, rank_type, source, updated_at, item_category, icon FROM ${table} WHERE namespace = ? AND kind = ? AND lang = ? AND entity_id IN (${ids.map(() => '?').join(',')})`,
   ).bind(game, kind, lang, ...ids).all<MetadataRow>();
   const byId = new Map(result.results.map(item => [item.entity_id, item]));
   const entries = ids.flatMap<PublicItem>(id => {

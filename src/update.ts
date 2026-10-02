@@ -54,15 +54,15 @@ export async function writeMetadata(db: D1Database, input: unknown): Promise<{ u
   // JSON expansion keeps each statement well below D1's bound-parameter limit.
   // A single D1 batch atomically updates all affected tables.
   const statements = [...groups].map(([table, rows]) => db.prepare(`
-    INSERT INTO ${table} (namespace, kind, entity_id, lang, name, item_type, rank_type, gacha_type, source, updated_at, item_category, icon)
+    INSERT INTO ${table} (namespace, kind, entity_id, lang, name, item_type, rank_type, source, updated_at, item_category, icon)
     SELECT json_extract(value, '$.game'), json_extract(value, '$.kind'), json_extract(value, '$.entity_id'),
       json_extract(value, '$.lang'), json_extract(value, '$.name'), json_extract(value, '$.item_type'),
-      json_extract(value, '$.rank_type'), json_extract(value, '$.gacha_type'), ?, ?,
+      json_extract(value, '$.rank_type'), ?, ?,
       json_extract(value, '$.item_category'), json_extract(value, '$.icon')
     FROM json_each(?) WHERE 1
     ON CONFLICT (namespace, kind, lang, entity_id) DO UPDATE SET
       name=excluded.name, item_type=excluded.item_type, rank_type=excluded.rank_type,
-      gacha_type=excluded.gacha_type, source=excluded.source, updated_at=excluded.updated_at,
+      source=excluded.source, updated_at=excluded.updated_at,
       item_category=COALESCE(excluded.item_category, ${table}.item_category), icon=COALESCE(excluded.icon, ${table}.icon)
   `).bind(data.source, updatedAt, JSON.stringify(rows)));
   await db.batch(statements);

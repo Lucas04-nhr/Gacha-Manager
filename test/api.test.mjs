@@ -16,6 +16,8 @@ before(async () => {
   db = await mf.getD1Database('DB');
   for (const sql of migration.split(';').filter(sql => sql.trim())) await db.prepare(sql).run();
   for (const sql of metadataSql(fixture, '2026-10-02T00:00:00.000Z').split('\n').filter(sql => sql.startsWith('INSERT'))) await db.prepare(sql).run();
+  const cleanup = await readFile(new URL('../migrations/0003_remove_gacha_type.sql', import.meta.url), 'utf8');
+  for (const sql of cleanup.split(';').filter(sql => sql.trim())) await db.prepare(sql).run();
 });
 after(async () => { await mf?.dispose(); });
 
@@ -26,6 +28,10 @@ test('four business tables and physical namespace isolation', async () => {
   const result = await db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE '_cf_%'").all();
   assert.deepEqual(result.results.map(row => row.name).sort(), ['genshin_meta', 'genshin_ugc_meta', 'starrail_meta', 'zenless_meta']);
   await assert.rejects(db.prepare("INSERT INTO genshin_meta SELECT * FROM genshin_ugc_meta").run());
+  for (const table of ['genshin_meta', 'genshin_ugc_meta', 'starrail_meta', 'zenless_meta']) {
+    const columns = await db.prepare(`PRAGMA table_info(${table})`).all();
+    assert.equal(columns.results.some(column => column.name === 'gacha_type'), false);
+  }
   const standard = await data('/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
   const costume = await data('/api/v1/items?game=hk4e_ugc&lang=zh-cn&ids=10000003');
   assert.equal(standard.items[0].name, '琴');
@@ -90,7 +96,8 @@ test('public CORS, preflight, methods, HEAD and webpage', async () => {
   assert.equal(head.status, 200);
   assert.equal(await head.text(), '');
   const page = await request('/');
-  assert.match(await page.text(), /hk4e_ugc/);
+  assert.equal(page.headers.get('Content-Type'), 'text/plain; charset=utf-8');
+  assert.equal(await page.text(), 'Welcome to Gacha Metadata API hosted by Lucas04-nhr! See https://blog.lucas04.top/docs/gacha-meta/ for documentation.');
   assert.match(page.headers.get('Content-Security-Policy'), /default-src 'none'/);
 });
 

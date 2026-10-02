@@ -13,7 +13,7 @@ Never accept, store or log player UIDs, account identifiers, cookies, authkeys, 
 - `src/upstream.ts`: Enka processed stores, lazy Dimbreath field completion and Starward buddy/UGC adapters.
 - `src/metadata.mjs` and `src/metadata.d.mts`: shared metadata validation for Worker and offline operator tool, and its type contract. Keep them consistent.
 - `src/catalog.json`: namespace-to-table allowlist, languages and query limits, shared with the operator tool.
-- `src/page.ts`: static API documentation at `/`; no user-data input forms.
+- `src/page.ts`: exact plain-text welcome message at `/`, linking to the external documentation; no HTML or user-data forms.
 - `migrations/`: versioned D1 schema; do not edit a migration already applied to a shared database.
 - `scripts/metadata-sql.mjs`: offline, operator-only public metadata validation and upsert generation.
 - `test/`: workerd/Miniflare integration tests. Fixtures contain synthetic rows and must not be loaded into production.
@@ -32,7 +32,7 @@ Keep four physically separate tables:
 | `hkrpg` | `starrail_meta` | Star Rail warps |
 | `nap` | `zenless_meta` | Zenless Zone Zero signals |
 
-Only maintain public items (`kind=item`). Keep the historical initial schema compatible, but do not expose a pool schedule API or accept pool writes. The primary key remains `(namespace, kind, lang, entity_id)`. Never merge UGC into normal Genshin metadata.
+Only maintain public items (`kind=item`). Do not expose a pool schedule API or accept pool writes. Migration 0003 removes `gacha_type` by rebuilding the tables while retaining every item row. Do not modify already-applied migrations. The primary key remains `(namespace, kind, lang, entity_id)`. Never merge UGC into normal Genshin metadata.
 
 Keep IDs and raw `rank_type` as strings. GI/HSR raw ranks are 3/4/5; ZZZ raw 2/3/4 maps to display 3/4/5. UGC Starward Rank 1–5 maps directly; 0/unknown is null. Types and icons belong to the unified schema; UGC may contain related rewards, so its generic category is `ugc_item`. Do not fabricate names or icons. Missing IDs and languages are explicit.
 
@@ -43,7 +43,7 @@ Updates use a single D1 batch across affected tables, after full validation. JSO
 
 ## Wrangler executable
 
-Use the Homebrew-installed `/opt/homebrew/bin/wrangler` for every Wrangler operation, including deployment, migrations, secrets, development, builds and type generation. Do not use `npx wrangler` or the repository-local binary. npm scripts that invoke Wrangler must use this absolute path.
+For local Wrangler operations, explicitly use the Homebrew-installed `/opt/homebrew/bin/wrangler`, including deployment, migrations, secrets, development, dry-run builds and type generation. Exception: keep the package.json `build` script as portable `wrangler deploy --dry-run --outdir dist`, because Cloudflare automatic builds cannot access a macOS Homebrew path. For local test verification, run `/opt/homebrew/bin/wrangler deploy --dry-run --outdir dist` followed by `node --test test/*.test.mjs` rather than invoking the portable build script.
 
 ## Implementation and verification
 
