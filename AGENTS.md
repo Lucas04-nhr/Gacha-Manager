@@ -41,6 +41,10 @@ Keep SQL table names exclusively in the static catalog allowlist and bind every 
 
 Updates use a single D1 batch across affected tables, after full validation. JSON expansion bounds SQL parameters even for large payloads. Enforce 1 MiB/2000-entry HTTP and feed limits. Do not delete rows absent from a feed. Cron fetch URLs are deployment-controlled `METADATA_FEEDS`, never request-provided. Do not follow redirects, forward operator credentials or log payloads, feed URLs, tokens or raw errors. Attempt all configured feeds and report any failure to the scheduled runtime; each feed is atomic, multiple feeds are independent. Empty extra feeds do not disable built-in sources; `UPSTREAM_SYNC_ENABLED=false` disables built-in synchronization. Extra feeds use normalized item metadata.
 
+## Wrangler executable
+
+Use the Homebrew-installed `/opt/homebrew/bin/wrangler` for every Wrangler operation, including deployment, migrations, secrets, development, builds and type generation. Do not use `npx wrangler` or the repository-local binary. npm scripts that invoke Wrangler must use this absolute path.
+
 ## Implementation and verification
 
 Use strict TypeScript, two-space indentation, explicit error handling and no `any` or unsafe double casts. Do not keep request-scoped state in module globals. Keep API errors sanitized and avoid logging request URLs, headers, bodies, SQL parameters or raw exceptions. Public successes may have short cache lifetimes; errors must use `no-store`.

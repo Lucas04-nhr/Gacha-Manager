@@ -1,29 +1,56 @@
 # Gacha Metadata API
 
-为博客抽卡记录管理页面提供公共物品与卡池元数据查询的 Cloudflare Worker。前端发送游戏、语言和物品／卡池 ID，Worker 从现有 D1 数据库 `gacha_meta` 返回名称、物品类型、原始等级等信息。
+A Cloudflare Worker that serves public item metadata to a blog's gacha record management page. The frontend sends a game, language and item IDs; the Worker queries the existing D1 database `gacha_meta` and returns names, rarity, types and icons.
 
-本仓库只负责元数据查询与维护。UIGF 文件导入导出、用户记录整理展示、授权链接解析、增量抓取和本地存储全部属于前端；Worker 不接收这些文件、记录、UID、Cookie 或授权链接。无需账号系统。
+This repository handles public metadata queries and maintenance only. The frontend handles user records, UIGF import/export, link parsing, incremental fetching, display and local storage. The Worker does not accept UIDs, cookies, authkeys, user records or authorization links. It has no account system and does not maintain banner schedules.
 
-## 数据与绑定
+## Data sources and architecture
 
-`wrangler.jsonc` 已配置现有数据库的真实 ID，Worker 使用 `env.DB` 访问 D1。`ALLOWED_ORIGINS` 是 CORS 配置变量，默认 `*`，适用于不带凭据的公共查询；可改为逗号分隔的博客来源，例如 `https://blog.example.com,http://localhost:8080`。来源必须包含协议及必要的端口，不包含路径或末尾 `/`。来源限制不是身份认证，API 仍是公共服务。
+```text
+Enka processed store (GI / HSR / ZZZ)
+                 ↓
+Unified item schema: { id, name, rank, type, icon }
+                 ↑
+Dimbreath: on-demand completion of missing Enka fields only
 
-本服务只需要 D1 绑定，不需要为用户数据增加 KV、R2 或 Durable Objects。`workers_dev: true` 使部署后的 Worker 具有网页和 API 访问地址。当前源码并不意味着已经完成云端部署或远程迁移。
+Starward public static metadata → Bangboo / Miliastra outfits
+                 ↓
+Existing D1 gacha_meta → Public query API
+```
 
-| `game` | 独立 D1 表 | 元数据范围 |
+The primary source is the [EnkaNetwork/API-docs processed store](https://github.com/EnkaNetwork/API-docs/tree/master/store). GI uses `gi/avatars.json`, `weapons.json` and `locs.json`; HSR uses `hsr/avatars.json`, `weapons.json` and `hsr.json`; ZZZ uses `zzz/avatars.json`, `weapons.json` and `locs.json`. Only public store files are read; player APIs are not called.
+
+Existing Enka values always take precedence. Dimbreath is accessed only when a name, rank or icon is missing. GI/HSR use the corresponding configuration files and text maps; ZZZ uses verified text maps. HSR's 64-bit text hashes are preserved as exact strings. Text maps are streamed, retaining only the required keys, with a 64 MiB limit. Configuration files are limited to 8 MiB, and Enka/Starward files to 1 MiB. Each request has a 20-second timeout, and redirects are rejected. ZZZ's obfuscated configuration has no reliable fallback mapping for ranks or icons yet, so these fields are never guessed.
+
+If the primary download fails, Dimbreath does not replace the entire source. Entries that remain incomplete after fallback are skipped. Logs contain fixed events, game/language identifiers, fallback counts and unresolved counts, without raw payloads. The primary `source` points to Enka; the `metadata_fallback` event reports how many entries were completed using Dimbreath. Skipping an entry does not delete an existing database row.
+
+Special items follow the public metadata sources used by [Starward](https://github.com/Scighost/Starward):
+
+- **Bangboo:** `https://starward-static.scighost.com/metadata/v1/zzz/ZZZGachaInfo.nap_global.<lang>.json`. Only Bangboo IDs in the `5xxxx` range are imported, with type `bangboo`. Agents and W-Engines remain managed through Enka.
+- **Miliastra Wonderland outfits:** `https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json`, stored in the separate `hk4e_ugc` table. The source currently provides Chinese names only, so entries are stored under `zh-cn`, never relabeled as English or another language. The list includes outfits and related rewards, using the generic type `ugc_item`. Unnamed entries are skipped.
+
+These public sources change over time and do not guarantee coverage of every gacha item. Enka stores also contain items that are not obtainable through gacha. The API looks up metadata by ID; it does not determine whether an item is available in a current banner.
+
+## Bindings and tables
+
+`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. No new database, KV, R2 or Durable Objects are required.
+
+| `game` | Separate D1 table | Content |
 | --- | --- | --- |
-| `hk4e` | `genshin_meta` | 原神普通祈愿物品与卡池 |
-| `hk4e_ugc` | `genshin_ugc_meta` | 千星奇域衣装抽卡物品与卡池 |
-| `hkrpg` | `starrail_meta` | 星穹铁道跃迁物品与卡池 |
-| `nap` | `zenless_meta` | 绝区零调频物品与卡池 |
+| `hk4e` | `genshin_meta` | Genshin Impact characters and weapons |
+| `hkrpg` | `starrail_meta` | Honkai: Star Rail characters and Light Cones |
+| `nap` | `zenless_meta` | ZZZ agents, W-Engines and Bangboo |
+| `hk4e_ugc` | `genshin_ugc_meta` | Miliastra outfits and related rewards |
 
-每张表通过 `kind` 区分 `item`／`pool`，以 `(namespace, kind, lang, entity_id)` 作为主键。同一个数字 ID 可以属于不同游戏、不同语言、物品或卡池，互不覆盖。四张表只保存公共元数据；Cloudflare 内部表和 Wrangler 迁移记录表不计入这四张业务表。
+The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is currently maintained. Historical `pool` fields from the initial migration remain for compatibility with existing databases. The API neither queries nor writes banner schedules; `/api/v1/pools` returns 404. Migration `0002_item_details.sql` adds unified type and icon fields. Apply all migrations before deployment.
 
-`pool_id` 是具体卡池／排期 ID，`gacha_type` 是卡池类别，两者不可互换。星铁和绝区零的 `pool_id` 对应记录中的 `gacha_id`，千星衣装对应 `schedule_id`；千星的类别字段 `op_gacha_type` 在此 API 统一返回为 `gacha_type`。普通原神的具体卡池 ID 需要来自公共卡池配置，普通祈愿记录中的 `gacha_type` 不能充当排期 ID。此服务不会根据用户记录推断卡池。
+`ALLOWED_ORIGINS` defaults to `*` and can be changed to a comma-separated list of complete blog origins. Public API requests omit credentials; CORS origin restrictions are not authentication. The admin API uses the separate secret `METADATA_UPDATE_TOKEN`, which must never be included in the blog frontend.
 
-## 本地运行与验证
+## Local development
 
-需要当前 Wrangler 支持的 Node.js 版本和 npm。依赖版本锁定在 `package-lock.json`。
+All Wrangler commands and npm scripts use the Homebrew-installed `/opt/homebrew/bin/wrangler`.
+
+Requires Node.js 22.18+ (or a newer version supported by Wrangler) and npm.
 
 ```sh
 npm ci
@@ -31,146 +58,129 @@ npm run types
 npm run check
 npm run db:migrate:local
 npm run dev
-```
-
-打开 `http://localhost:8787/` 查看 API 说明网页。开发默认连接本地模拟 D1，不修改线上数据库。迁移只创建表，不填入元数据；空表的查询正常返回 `missing_ids`。
-
-```sh
 npm test
 ```
 
-测试先执行 Wrangler 部署 dry run，然后在 Miniflare/workerd 与真实本地 D1 上验证四表隔离、物品／卡池隔离、批量查询、语言、原始等级、CORS、错误响应和维护脚本。测试数据含合成衣装与卡池，仅用于测试，不能用于生产。`npm run build` 仅生成 `dist/`，不会发布 Worker。
+Open `http://localhost:8787/` for the API documentation page. Development uses local D1 by default and does not modify the production database. Migrations do not populate metadata; empty tables correctly return `missing_ids`. `npm run build` performs a deployment dry run without publishing the Worker. Tests use local workerd/D1 and mocked upstream sources; test fixtures must not be used in production.
 
-## 查询 API
+## Public query API
 
-所有端点支持 `GET`、`HEAD`、`OPTIONS`，不接受写入。没有认证、Cookie 或用户数据请求体。只允许列出的查询参数，每个参数只能出现一次。
+Public queries support `GET`, `HEAD` and `OPTIONS`, without authentication, cookies or user request bodies. Only the documented query parameters are allowed, and each parameter may appear once.
 
-| 路径 | 用途 |
+| Path | Purpose |
 | --- | --- |
-| `/` | HTML API 说明页 |
-| `/api/v1/health` | 检查四张元数据表能否查询；空表不代表故障 |
-| `/api/v1/games` | 命名空间、允许的语言、默认语言与批量上限；不代表数据已完整收录 |
-| `/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003,11401` | 按物品 ID 查询 |
-| `/api/v1/pools?game=hkrpg&lang=zh-cn&ids=2003` | 按具体卡池 ID 查询 |
+| `/` | API documentation page |
+| `/api/v1/health` | Check that all four business tables can be queried |
+| `/api/v1/games` | Supported games, languages, default language and query limit |
+| `/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003,11401` | Batch lookup by item ID |
 
-`game` 必填，`lang` 默认 `en-us`，`ids` 必填，包含 1–90 个逗号分隔的十进制字符串，每个 ID 最多 20 位。服务去重并按请求顺序返回。请先在前端去重，再每 90 个 ID 分批调用。D1 查询包含额外的命名空间、类别和语言参数，因此不使用 100 个 ID 的批量大小。
+`game` is required. `lang` defaults to `en-us`. `ids` is required and contains 1–90 decimal string IDs, each up to 20 digits. The service deduplicates IDs and returns results in request order. It does not fall back to another language.
 
-物品响应结构示例（不代表这些 ID 已写入数据库）：
+Example response (does not imply these entries have been imported):
 
 ```json
 {
   "game": "hk4e",
   "lang": "zh-cn",
-  "items": [
-    {
-      "item_id": "10000003",
-      "name": "琴",
-      "item_type": "角色",
-      "rank_type": "5",
-      "rarity": 5,
-      "source": "https://example.com/public-metadata",
-      "updated_at": "2026-10-02T00:00:00.000Z"
-    }
-  ],
+  "items": [{
+    "item_id": "10000003", "name": "琴", "rank_type": "5",
+    "rarity": 5, "rank": 5, "type": "character", "item_type": "character",
+    "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png",
+    "source": "https://github.com/EnkaNetwork/API-docs/tree/master/store/gi",
+    "updated_at": "2026-10-02T03:00:00.000Z"
+  }],
+  "data": {
+    "10000003": { "name": "琴", "rank": 5, "type": "character", "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png" }
+  },
   "missing_ids": ["11401"]
 }
 ```
 
-`rank_type` 保留游戏原始字符串。原神普通祈愿和星铁的 `rarity` 是 3/4/5；绝区零原始 `rank_type` 为 2/3/4，展示 `rarity` 为 3/4/5。千星衣装保留原始等级，`rarity` 返回 `null`，避免未经核实的星级转换。`item_type` 是维护者提供的本地化类型文本，不是统一枚举。
+`data` is the unified dictionary keyed by ID. `items` also preserves raw ranks, sources and update timestamps. Unified `type` values are `character`, `weapon`, `light_cone`, `w_engine`, `bangboo` and `ugc_item`; manual outfit maintenance also supports `outfit`. Legacy manual rows without a type or icon return `null` for those fields instead of fabricated values.
 
-卡池响应使用 `pools` 数组，每个元素包含 `pool_id`、`name`、`gacha_type`、`source`、`updated_at`，也有顶层 `game`、`lang`、`missing_ids`。
+`rank_type` preserves the raw string. `rank` and `rarity` are display ranks: GI/HSR use 3/4/5; ZZZ raw values 2/3/4 map to display values 3/4/5. The Miliastra source directly provides ranks 1–5; rank 0 or another unknown rank returns `null`. `item_type` is the type text supplied by the maintainer; automatic synchronization uses the unified type value.
 
-服务只匹配请求的语言，不自动回退。`missing_ids` 表示当前游戏和语言没有对应元数据，可能是新物品、新卡池或尚未维护的语言；前端应保留原始文件信息或展示未知状态，不能猜测名称和等级。全部缺失仍返回 HTTP 200。成功查询可缓存 300 秒，配置可缓存 3600 秒；数据库更新后旧响应最多可能保留相应缓存时间。
+Missing IDs appear in `missing_ids`. A query with no matches still returns 200. Chinese outfit queries must explicitly use `lang=zh-cn`. Successful queries are cached for 300 seconds and configuration responses for 3600 seconds, so updates may briefly return cached results.
 
 ```js
-const params = new URLSearchParams({
-  game: 'hk4e_ugc',
-  lang: 'zh-cn',
-  ids: publicItemIds.join(','),
-});
-const response = await fetch(`${metadataApiBase}/api/v1/items?${params}`, {
-  credentials: 'omit',
-});
+const params = new URLSearchParams({ game: 'hk4e_ugc', lang: 'zh-cn', ids: publicItemIds.join(',') });
+const response = await fetch(`${metadataApiBase}/api/v1/items?${params}`, { credentials: 'omit' });
 if (!response.ok) throw new Error(`Metadata API: ${response.status}`);
-const { items, missing_ids } = await response.json();
+const { data, missing_ids } = await response.json();
 ```
 
-错误响应统一为：
+Errors use `{ "error": { "code": "…", "message": "…" } }` with `no-store`: 400 for invalid parameters, 403 for rejected origins, 404 for unknown endpoints, 405 for unsupported methods, 414 for oversized queries, and 503 for database failures or missing migrations. SQL and raw exceptions are not exposed. Platform logs may still contain request information, so the frontend must send public query conditions only.
+
+## Scheduled synchronization and REST updates
+
+The default Cron schedule is `0 3 * * *`, running daily at **03:00 UTC**. Deployment variables:
 
 ```json
-{ "error": { "code": "INVALID_GAME", "message": "game must be hk4e, hk4e_ugc, hkrpg or nap." } }
+{
+  "UPSTREAM_SYNC_ENABLED": "true",
+  "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\"]",
+  "METADATA_FEEDS": "[]"
+}
 ```
 
-| HTTP 状态 | 情况 |
-| --- | --- |
-| 400 | 不支持的游戏／语言、缺失或非法 ID、未知或重复参数 |
-| 403 | 浏览器来源未获 CORS 配置允许 |
-| 404 | 路径不存在 |
-| 405 | 方法或预检请求不支持 |
-| 414 | 查询字符串超过 4096 字符 |
-| 503 | D1 查询失败或未应用迁移 |
+`UPSTREAM_SYNC_ENABLED=false` disables built-in sources. The language list controls the three games and Bangboo; outfits are always maintained in Chinese only. Sources may not provide every declared language, and a missing language causes that task to fail. `METADATA_FEEDS` is a string containing a JSON array of additional normalized feed URLs, empty by default. These feeds run after built-in synchronization and can provide maintainer overrides. Each feed is limited to 2000 rows/1 MiB, with at most eight public HTTPS domain URLs. Credentials, ports, query strings and fragments are rejected. Requests cannot select fetch destinations.
 
-错误响应使用 `no-store`，不会暴露原始 SQL 或异常。应用日志只记录固定故障事件，不记录请求参数；配置还关闭了调用日志并启用查询字符串脱敏。Cloudflare 其他平台层仍可能记录请求信息，因此前端必须保证请求仅包含公共元数据条件。
+Each game/language task uses an independent transaction and preserves existing data. A failed source does not prevent subsequent tasks from running; the overall synchronization reports failure, while successful tasks remain committed. Logs contain fixed identifiers and counts only. Admin credentials are not forwarded to upstream sources.
 
-## 元数据维护
+Configure a random production secret of at least 32 characters:
 
-生产 API 不提供写入端点。维护者从已核实的公开数据源整理以下 JSON，由离线脚本校验并生成 upsert SQL：
+```sh
+/opt/homebrew/bin/wrangler secret put METADATA_UPDATE_TOKEN
+```
+
+For local development, set the same variable in the ignored `.dev.vars` file. The admin API returns 503 if the secret is missing or its length is outside 32–512 characters. Public queries and Cron do not depend on this token. Admin endpoints are for maintainer scripts/CI only, require `Authorization: Bearer <token>`, reject all browser `Origin` headers and do not enable CORS. Never put real tokens in source code or command history.
+
+- `POST /api/v1/admin/sync`: accepts no request body and immediately runs the same built-in and additional feed synchronization. Success returns `{ "updated": 123, "sources": 9 }`. Failure returns 502 `SYNC_FAILED`; successful tasks have already committed.
+- `POST /api/v1/admin/metadata`: requires `Content-Type: application/json` and manually writes normalized public item metadata, limited to 2000 rows/1 MiB. Compressed request bodies are not accepted.
+
+Manual payload:
 
 ```json
 {
   "source": "https://example.com/public-metadata",
-  "entries": [
-    {
-      "game": "hk4e",
-      "lang": "zh-cn",
-      "kind": "item",
-      "item_id": "10000003",
-      "name": "琴",
-      "item_type": "角色",
-      "rank_type": "5"
-    },
-    {
-      "game": "hkrpg",
-      "lang": "zh-cn",
-      "kind": "pool",
-      "pool_id": "2003",
-      "name": "来自公开配置的卡池名称",
-      "gacha_type": "11"
-    }
-  ]
+  "entries": [{
+    "game": "hk4e", "lang": "en-us", "kind": "item", "item_id": "10000003",
+    "name": "Jean", "item_type": "character", "rank_type": "5", "type": "character",
+    "icon": "https://enka.network/ui/UI_AvatarIcon_Side_Qin.png"
+  }]
 }
 ```
 
-这是格式示例；替换来源和所有示例值后才能用于生产。来源必须是公开 HTTPS URL，不能带凭据、查询参数或 fragment。不同来源使用不同文件。每行必须包含准确名称和类型／等级或卡池类别；缺失信息必须先在维护流程中解决，脚本不会推断。千星衣装使用 `game: "hk4e_ugc"`；普通物品和衣装即使 ID 相同也会写入独立表。
+The source must be a public HTTPS URL without credentials, a query string or a fragment. `type` and `icon` may be omitted for compatibility with legacy manual payloads; omitting them during an update does not clear existing values. All fields are validated before one atomic D1 batch upsert. User fields, numeric IDs, duplicate keys and invalid ranks are rejected. Rows absent from the request are preserved. Success returns `{ "updated": 1, "updated_at": "…" }`.
 
-```sh
-npm run metadata:sql -- metadata.json metadata.sql
-npx wrangler d1 execute gacha_meta --local --file metadata.sql
+Example maintenance script (token injected through the environment):
+
+```js
+const response = await fetch(`${process.env.GACHA_API_BASE}/api/v1/admin/sync`, {
+  method: 'POST', headers: { Authorization: `Bearer ${process.env.GACHA_ADMIN_TOKEN}` },
+});
+if (!response.ok) throw new Error(`Sync failed: ${response.status}`);
+console.log(await response.json());
 ```
 
-脚本先校验整个文件，拒绝未知字段（包括用户数据）、数字类型 ID、重复键和非法等级，正确转义 SQL 文本。不会访问网络或自行修改数据库；不会覆盖已有输出文件。维护文件自身也不应包含任何用户记录。upsert 更新名称等属性，保留历史卡池及其他语言，不执行全表清空。多个批次不是整个数据集的原子发布；较大更新应在维护流程中安排并核对数量。
+For offline maintenance, run `npm run metadata:sql -- metadata.json metadata.sql` to validate metadata and generate SQL, then import it locally with `/opt/homebrew/bin/wrangler d1 execute gacha_meta --local --file metadata.sql`. The script does not access the network or overwrite an existing output file. Generated `/metadata.sql` at the repository root is ignored; migration and test sources remain under version control.
 
-本实现没有预置完整生产数据，也没有自动同步／定时抓取任务。四个命名空间的查询结构已支持，但实际覆盖取决于维护者导入的公共元数据，尤其是千星衣装和历史具体卡池。不要把测试 fixture 当作数据源。
-
-## 云端初始化和部署
-
-现有 `gacha_meta` 已绑定，无需 `wrangler d1 create`。下面命令会修改远程数据库和发布 Worker，执行前先完成本地验证并检查配置：
+Test Cron locally:
 
 ```sh
-npx wrangler login
+/opt/homebrew/bin/wrangler dev --test-scheduled
+curl 'http://localhost:8787/cdn-cgi/local/scheduled?cron=0+3+*+*+*'
+```
+
+## Cloud deployment
+
+Source code and local verification do not imply that the Worker has been deployed or remote D1 has been modified. Maintainers can deploy with:
+
+```sh
+/opt/homebrew/bin/wrangler login
+/opt/homebrew/bin/wrangler secret put METADATA_UPDATE_TOKEN
 npm run db:migrate:remote
-npx wrangler d1 execute gacha_meta --remote --file metadata.sql
 npm run deploy
 ```
 
-部署输出的 `https://gacha-manager.<你的子域>.workers.dev/` 是 API 说明网页，前端基址为相同来源，查询路径为 `/api/v1/items` 或 `/api/v1/pools`。若需要自定义域名，再按博客域名配置路由。发布后检查 `/api/v1/health`，并使用已导入的物品和卡池 ID 验证实际响应。CI 中通过 Cloudflare 环境变量设置部署凭据，不提交 token。
-
-## 参考与约定
-
-- [UIGF v4.2 标准](https://uigf.org/en/standards/uigf.html)：游戏键及原始物品字段，包含 `hk4e_ugc`、`schedule_id` 和 `op_gacha_type`。
-- [PizzaHelperUnited](https://github.com/pizza-studio/PizzaHelperUnited)：`Packages/GachaKit` 中游戏等级与展示星级的区分，特别是绝区零的偏移处理。
-- [GachaMetaGenerator](https://github.com/pizza-studio/GachaMetaGenerator)：PizzaHelper 的多语言物品 ID／名称／等级映射；其现有输出针对普通原神与星铁，不能当作完整的千星／绝区零／卡池数据源。
-- [hoyo-buddy](https://github.com/seriaati/hoyo-buddy/blob/main/hoyo_buddy/utils/gacha_data.py)：按游戏和语言维护公共物品字典、校验上游结构的方式；本服务不移植其账号与用户记录存储。
-- [Cloudflare D1 绑定配置](https://developers.cloudflare.com/workers/wrangler/configuration/#d1-databases)与[迁移文档](https://developers.cloudflare.com/d1/reference/migrations/)。
-
-项目沿用仓库现有的 [LICENSE](LICENSE)。公共游戏元数据及参考项目内容的权利归各自权利人；本实现没有复制参考项目源代码或打包其完整数据。
+After deployment, visit `https://gacha-manager.<your-subdomain>.workers.dev/` for the documentation page, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
