@@ -136,12 +136,12 @@ The default Cron schedule is `0 3 * * *`, running daily at **03:00 UTC**. Deploy
 ```json
 {
   "UPSTREAM_SYNC_ENABLED": "true",
-  "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\"]",
+  "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]",
   "METADATA_FEEDS": "[]"
 }
 ```
 
-`UPSTREAM_SYNC_ENABLED=false` disables built-in sources. The language list controls the three games and Bangboo; outfits are always maintained in Chinese only. Sources may not provide every declared language, and a missing language causes that task to fail. `METADATA_FEEDS` is a string containing a JSON array of additional normalized feed URLs, empty by default. These feeds run after built-in synchronization and can provide maintainer overrides. Each feed is limited to 2000 rows/1 MiB, with at most eight public HTTPS domain URLs. Credentials, ports, query strings and fragments are rejected. Requests cannot select fetch destinations.
+`UPSTREAM_SYNC_ENABLED=false` disables built-in sources. The default synchronization languages are English (`en-us`), Simplified Chinese (`zh-cn`), Traditional Chinese (`zh-tw`) and Japanese (`ja-jp`). The language list controls the three games and Bangboo; outfits are always maintained in Chinese only. Sources may not provide every declared language, and a missing language causes that task to fail. `METADATA_FEEDS` is a string containing a JSON array of additional normalized feed URLs, empty by default. These feeds run after built-in synchronization and can provide maintainer overrides. Each feed is limited to 2000 rows/1 MiB, with at most eight public HTTPS domain URLs. Credentials, ports, query strings and fragments are rejected. Requests cannot select fetch destinations.
 
 Each game/language task uses an independent transaction and preserves existing data. A failed source does not prevent subsequent tasks from running; the overall synchronization reports failure, while successful tasks remain committed. Logs contain fixed identifiers and counts only. Admin credentials are not forwarded to upstream sources.
 

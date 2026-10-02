@@ -11,7 +11,7 @@
     "ALLOWED_ORIGINS": "*",
     "METADATA_FEEDS": "[]",
     "UPSTREAM_SYNC_ENABLED": "true",
-    "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\"]"
+    "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]"
   },
   "secrets": {
     "required": ["METADATA_UPDATE_TOKEN"]

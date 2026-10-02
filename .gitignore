@@ -7,6 +7,9 @@ dist/
 .dev.vars*
 .env*
 
+# Local Development
+.vscode
+
 # macOS Resources
 .DS_Store
 ._*
