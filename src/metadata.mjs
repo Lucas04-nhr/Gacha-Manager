@@ -38,11 +38,11 @@ export function validateMetadata(input, maxEntries = 100000) {
   const entries = data.entries.map((value, index) => {
     const row = object(value, `entries[${index}]`);
     const context = `entries[${index}]`;
-    if (!Object.hasOwn(catalog.games, row.game)) throw new Error(`${context}: unsupported game`);
+    if (typeof row.game !== 'string' || !Object.hasOwn(catalog.games, row.game)) throw new Error(`${context}: unsupported game`);
     if (!catalog.languages.includes(row.lang)) throw new Error(`${context}: unsupported language`);
     if (!['item', 'pool'].includes(row.kind)) throw new Error(`${context}: kind must be item or pool`);
     keys(row, row.kind === 'item'
-      ? ['game', 'lang', 'kind', 'item_id', 'name', 'item_type', 'rank_type']
+      ? ['game', 'lang', 'kind', 'item_id', 'name', 'item_type', 'rank_type', 'type', 'icon']
       : ['game', 'lang', 'kind', 'pool_id', 'name', 'gacha_type'], context);
     const id = decimal(row.kind === 'item' ? row.item_id : row.pool_id, `${context}.id`);
     const name = string(row.name, 256, `${context}.name`);
@@ -52,15 +52,27 @@ export function validateMetadata(input, maxEntries = 100000) {
     let rank = null;
     let type = null;
     let gacha = null;
+    let category = null;
+    let icon = null;
     if (row.kind === 'item') {
       type = string(row.item_type, 64, `${context}.item_type`);
       rank = decimal(row.rank_type, `${context}.rank_type`);
       const ranks = row.game === 'nap' ? ['2', '3', '4'] : ['3', '4', '5'];
       if (row.game !== 'hk4e_ugc' && !ranks.includes(rank)) throw new Error(`${context}: invalid raw rank_type`);
+      if (row.type !== undefined) {
+        const allowed = { hk4e: ['character', 'weapon'], hkrpg: ['character', 'light_cone'], nap: ['character', 'w_engine', 'bangboo'], hk4e_ugc: ['outfit'] };
+        if (!allowed[row.game].includes(row.type)) throw new Error(`${context}: invalid item type`);
+        category = row.type;
+      }
+      if (row.icon !== undefined) {
+        icon = string(row.icon, 2048, `${context}.icon`);
+        const url = new URL(icon);
+        if (url.protocol !== 'https:' || url.username || url.password) throw new Error(`${context}: invalid icon URL`);
+      }
     } else {
       gacha = decimal(row.gacha_type, `${context}.gacha_type`);
     }
-    return { game: row.game, kind: row.kind, entity_id: id, lang: row.lang, name, item_type: type, rank_type: rank, gacha_type: gacha };
+    return { game: row.game, kind: row.kind, entity_id: id, lang: row.lang, name, item_type: type, rank_type: rank, gacha_type: gacha, item_category: category, icon };
   });
   return { source, entries };
 }

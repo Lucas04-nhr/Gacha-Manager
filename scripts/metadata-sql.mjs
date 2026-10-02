@@ -9,8 +9,8 @@ const sqlValue = value => value === null ? 'NULL' : `'${value.replaceAll("'", "'
 export function metadataSql(input, updatedAt = new Date().toISOString()) {
   const { source, entries } = validateMetadata(input);
   const statements = entries.map(row => {
-    const values = [row.game, row.kind, row.entity_id, row.lang, row.name, row.item_type, row.rank_type, row.gacha_type, source, updatedAt].map(sqlValue);
-    return `INSERT INTO ${catalog.games[row.game]} (namespace, kind, entity_id, lang, name, item_type, rank_type, gacha_type, source, updated_at) VALUES (${values.join(', ')}) ON CONFLICT (namespace, kind, lang, entity_id) DO UPDATE SET name=excluded.name, item_type=excluded.item_type, rank_type=excluded.rank_type, gacha_type=excluded.gacha_type, source=excluded.source, updated_at=excluded.updated_at;`;
+    const values = [row.game, row.kind, row.entity_id, row.lang, row.name, row.item_type, row.rank_type, row.gacha_type, source, updatedAt, row.item_category, row.icon].map(sqlValue);
+    return `INSERT INTO ${catalog.games[row.game]} (namespace, kind, entity_id, lang, name, item_type, rank_type, gacha_type, source, updated_at, item_category, icon) VALUES (${values.join(', ')}) ON CONFLICT (namespace, kind, lang, entity_id) DO UPDATE SET name=excluded.name, item_type=excluded.item_type, rank_type=excluded.rank_type, gacha_type=excluded.gacha_type, source=excluded.source, updated_at=excluded.updated_at, item_category=COALESCE(excluded.item_category, ${catalog.games[row.game]}.item_category), icon=COALESCE(excluded.icon, ${catalog.games[row.game]}.icon);`;
   });
   return '-- Public metadata upserts; preserves historical pools and other languages.\n' + statements.join('\n') + '\n';
 }

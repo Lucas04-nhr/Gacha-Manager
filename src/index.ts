@@ -15,6 +15,8 @@ interface MetadataRow {
   gacha_type: string | null;
   source: string;
   updated_at: string;
+  item_category: string | null;
+  icon: string | null;
 }
 
 interface PublicItem {
@@ -23,6 +25,9 @@ interface PublicItem {
   item_type: string | null;
   rank_type: string | null;
   rarity: number | null;
+  rank: number | null;
+  type: string | null;
+  icon: string | null;
   source: string;
   updated_at: string;
 }
@@ -99,20 +104,25 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   // Only this static allowlist selects SQL table names; all request values are bound.
   const table = catalog.games[game as keyof typeof catalog.games];
   const result = await env.DB.prepare(
-    `SELECT entity_id, name, item_type, rank_type, gacha_type, source, updated_at FROM ${table} WHERE namespace = ? AND kind = ? AND lang = ? AND entity_id IN (${ids.map(() => '?').join(',')})`,
+    `SELECT entity_id, name, item_type, rank_type, gacha_type, source, updated_at, item_category, icon FROM ${table} WHERE namespace = ? AND kind = ? AND lang = ? AND entity_id IN (${ids.map(() => '?').join(',')})`,
   ).bind(game, kind, lang, ...ids).all<MetadataRow>();
   const byId = new Map(result.results.map(item => [item.entity_id, item]));
   const entries = ids.flatMap<PublicItem | PublicPool>(id => {
     const item = byId.get(id);
     if (!item) return [];
     const common = { name: item.name, source: item.source, updated_at: item.updated_at };
+    const rank = game === 'hk4e_ugc' ? null : Number(item.rank_type) + (game === 'nap' ? 1 : 0);
     return kind === 'item'
       ? [{ item_id: id, ...common, item_type: item.item_type, rank_type: item.rank_type,
-        rarity: game === 'hk4e_ugc' ? null : Number(item.rank_type) + (game === 'nap' ? 1 : 0) }]
+        rarity: rank, rank, type: item.item_category, icon: item.icon }]
       : [{ pool_id: id, ...common, gacha_type: item.gacha_type }];
   });
   // No default names or rarity for missing data, and no implicit language fallback.
-  return json({ game, lang, [kind === 'item' ? 'items' : 'pools']: entries, missing_ids: ids.filter(id => !byId.has(id)) }, 200, 'public, max-age=300');
+  const data = kind === 'item' ? Object.fromEntries(entries.map(entry => {
+    const item = entry as PublicItem;
+    return [item.item_id, { name: item.name, rank: item.rank, type: item.type, icon: item.icon }];
+  })) : undefined;
+  return json({ game, lang, [kind === 'item' ? 'items' : 'pools']: entries, data, missing_ids: ids.filter(id => !byId.has(id)) }, 200, 'public, max-age=300');
 }
 
 export default {
@@ -126,7 +136,7 @@ export default {
       if (!allowed) fail(403, 'ORIGIN_NOT_ALLOWED', 'Origin is not allowed.');
       const url = new URL(request.url);
       if (url.search.length > 4096) fail(414, 'QUERY_TOO_LONG', 'Query is too long.');
-      if (url.pathname === '/api/v1/admin/metadata') {
+      if (['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(url.pathname)) {
         query(url, []);
         response = await updateRequest(request, env);
       } else if (request.method === 'OPTIONS') {
@@ -153,7 +163,7 @@ export default {
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Vary', 'Origin');
-    const admin = new URL(request.url).pathname === '/api/v1/admin/metadata';
+    const admin = ['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(new URL(request.url).pathname);
     if (allowed && !admin) {
       if (wildcard) response.headers.set('Access-Control-Allow-Origin', '*');
       else if (origin) response.headers.set('Access-Control-Allow-Origin', origin);

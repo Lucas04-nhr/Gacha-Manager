@@ -1,5 +1,6 @@
 import catalog from './catalog.json';
 import { validateMetadata } from './metadata.mjs';
+import { upstreamJobs } from './upstream';
 
 export class UpdateError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -8,7 +9,7 @@ export class UpdateError extends Error {
 const maxBytes = 1024 * 1024;
 const maxEntries = 2000;
 
-async function readJson(body: ReadableStream<Uint8Array> | null): Promise<unknown> {
+export async function readJson(body: ReadableStream<Uint8Array> | null): Promise<unknown> {
   if (!body) throw new UpdateError(400, 'INVALID_JSON', 'JSON body is required.');
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -38,7 +39,7 @@ function contentType(headers: Headers): void {
   }
 }
 
-async function writeMetadata(db: D1Database, input: unknown): Promise<{ updated: number; updated_at: string }> {
+export async function writeMetadata(db: D1Database, input: unknown): Promise<{ updated: number; updated_at: string }> {
   let data: ReturnType<typeof validateMetadata>;
   try { data = validateMetadata(input, maxEntries); }
   catch { throw new UpdateError(400, 'INVALID_METADATA', 'Invalid public metadata; check the documented schema and limits.'); }
@@ -53,14 +54,16 @@ async function writeMetadata(db: D1Database, input: unknown): Promise<{ updated:
   // JSON expansion keeps each statement well below D1's bound-parameter limit.
   // A single D1 batch atomically updates all affected tables.
   const statements = [...groups].map(([table, rows]) => db.prepare(`
-    INSERT INTO ${table} (namespace, kind, entity_id, lang, name, item_type, rank_type, gacha_type, source, updated_at)
+    INSERT INTO ${table} (namespace, kind, entity_id, lang, name, item_type, rank_type, gacha_type, source, updated_at, item_category, icon)
     SELECT json_extract(value, '$.game'), json_extract(value, '$.kind'), json_extract(value, '$.entity_id'),
       json_extract(value, '$.lang'), json_extract(value, '$.name'), json_extract(value, '$.item_type'),
-      json_extract(value, '$.rank_type'), json_extract(value, '$.gacha_type'), ?, ?
+      json_extract(value, '$.rank_type'), json_extract(value, '$.gacha_type'), ?, ?,
+      json_extract(value, '$.item_category'), json_extract(value, '$.icon')
     FROM json_each(?) WHERE 1
     ON CONFLICT (namespace, kind, lang, entity_id) DO UPDATE SET
       name=excluded.name, item_type=excluded.item_type, rank_type=excluded.rank_type,
-      gacha_type=excluded.gacha_type, source=excluded.source, updated_at=excluded.updated_at
+      gacha_type=excluded.gacha_type, source=excluded.source, updated_at=excluded.updated_at,
+      item_category=COALESCE(excluded.item_category, ${table}.item_category), icon=COALESCE(excluded.icon, ${table}.icon)
   `).bind(data.source, updatedAt, JSON.stringify(rows)));
   await db.batch(statements);
   return { updated: data.entries.length, updated_at: updatedAt };
@@ -70,8 +73,8 @@ export async function updateRequest(request: Request, env: Env): Promise<Respons
   // Admin endpoints are server/operator-only. Never distribute the token to blog clients.
   if (request.headers.has('Origin')) throw new UpdateError(403, 'ADMIN_BROWSER_DISABLED', 'Admin endpoints do not permit browser origins.');
   if (request.method !== 'POST') throw new UpdateError(405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.');
-  if (!env.METADATA_UPDATE_TOKEN || env.METADATA_UPDATE_TOKEN.length < 32) {
-    throw new UpdateError(503, 'UPDATES_DISABLED', 'A metadata update secret of at least 32 characters must be configured.');
+  if (!env.METADATA_UPDATE_TOKEN || env.METADATA_UPDATE_TOKEN.length < 32 || env.METADATA_UPDATE_TOKEN.length > 512) {
+    throw new UpdateError(503, 'UPDATES_DISABLED', 'A metadata update secret of 32–512 characters must be configured.');
   }
   const authorization = request.headers.get('Authorization') ?? '';
   const match = /^Bearer ([^\s]{1,512})$/.exec(authorization);
@@ -83,6 +86,10 @@ export async function updateRequest(request: Request, env: Env): Promise<Respons
   ]);
   if (!crypto.subtle.timingSafeEqual(expectedHash, suppliedHash)) {
     throw new UpdateError(401, 'UNAUTHORIZED', 'A valid metadata update Bearer token is required.');
+  }
+  if (new URL(request.url).pathname === '/api/v1/admin/sync') {
+    if (request.body) throw new UpdateError(400, 'INVALID_BODY', 'Sync accepts no request body. Configure sources at deployment.');
+    return Response.json(await syncMetadata(env), { headers: { 'Cache-Control': 'no-store' } });
   }
   if (request.headers.has('Content-Encoding')) throw new UpdateError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Encoded request bodies are not supported.');
   contentType(request.headers);
@@ -104,16 +111,29 @@ function feeds(config: string): string[] {
   });
 }
 
-export async function syncMetadata(env: Env): Promise<void> {
+export async function syncMetadata(env: Env): Promise<{ updated: number; sources: number }> {
   const urls = feeds(env.METADATA_FEEDS);
+  const jobs = upstreamJobs(env);
   let failures = 0;
+  let updated = 0;
+  for (const job of jobs) {
+    try {
+      const result = await writeMetadata(env.DB, await job.load());
+      updated += result.updated;
+      console.log(JSON.stringify({ event: 'metadata_sync_complete', game: job.game, lang: job.lang, updated: result.updated }));
+    } catch {
+      failures += 1;
+      console.error(JSON.stringify({ event: 'metadata_sync_failed', game: job.game, lang: job.lang }));
+    }
+  }
   for (const [index, url] of urls.entries()) {
     try {
-      const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(15000), headers: { Accept: 'application/json' } });
+      const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(15000), headers: { Accept: 'application/json' } });
       if (!response.ok) { await response.body?.cancel(); throw new Error('Feed unavailable'); }
       try { contentType(response.headers); }
       catch (error) { await response.body?.cancel(); throw error; }
       const result = await writeMetadata(env.DB, await readJson(response.body));
+      updated += result.updated;
       console.log(JSON.stringify({ event: 'metadata_sync_complete', feed_index: index, updated: result.updated }));
     } catch {
       failures += 1;
@@ -121,5 +141,6 @@ export async function syncMetadata(env: Env): Promise<void> {
     }
   }
   // Attempt every configured feed, but let Cloudflare record a failed cron execution.
-  if (failures) throw new Error('One or more metadata feeds failed');
+  if (failures) throw new UpdateError(502, 'SYNC_FAILED', 'One or more sources failed; successful sources committed. Retry after fixing upstream failures.');
+  return { updated, sources: jobs.length + urls.length };
 }

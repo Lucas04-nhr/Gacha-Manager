@@ -89,6 +89,14 @@ test('upserts preserve historical pools and unrelated language entries', async (
   assert.equal((await pool.json()).pools.length, 1);
 });
 
+test('JSON expansion supports updates beyond D1 SQL parameter limits', async () => {
+  const entries = Array.from({ length: 200 }, (_, i) => ({ ...fixture.entries[0], item_id: String(90000000 + i) }));
+  const response = await post({ ...fixture, entries });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).updated, 200);
+  assert.equal((await item('hk4e', '90000199')).items.length, 1);
+});
+
 test('scheduled handler fetches configured normalized feeds with no authorization forwarding', async () => {
   const calls = [];
   const cron = new Miniflare(convertV4MiniflareOptions({ ...options,
@@ -125,5 +133,33 @@ test('cron continues after a failed feed, keeps existing metadata, and signals f
     assert.equal(calls.length, 2);
     const query = await cron.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
     assert.equal((await query.json()).items[0].name, '琴');
+  } finally { await cron.dispose(); }
+});
+
+test('empty cron feed configuration is a no-op', async () => {
+  const response = await mf.dispatchFetch(`https://worker.test${CorePaths.SCHEDULED}`);
+  assert.equal(response.status, 200);
+  assert.equal((await item('hk4e', '10000003')).items[0].name, "Jean's updated name");
+});
+
+test('cron rejects redirects and invalid metadata without following or writing', async () => {
+  const calls = [];
+  const cron = new Miniflare(convertV4MiniflareOptions({ ...options,
+    bindings: { ...options.bindings, METADATA_FEEDS: '["https://metadata.example.com/redirect","https://metadata.example.com/invalid"]' },
+    outboundService: async request => {
+      calls.push(request.url);
+      return request.url.endsWith('/redirect')
+        ? new Response(null, { status: 302, headers: { Location: 'https://other.example.com/data' } })
+        : Response.json({ ...fixture, uid: '123' });
+    },
+  }));
+  try {
+    await migrate(cron);
+    const response = await cron.dispatchFetch(`https://worker.test${CorePaths.SCHEDULED}`);
+    assert.equal(response.status, 500);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(url => url.startsWith('https://metadata.example.com/')));
+    const query = await cron.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
+    assert.deepEqual((await query.json()).missing_ids, ['10000003']);
   } finally { await cron.dispose(); }
 });

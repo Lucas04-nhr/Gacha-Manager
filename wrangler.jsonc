@@ -8,7 +8,9 @@
   "workers_dev": true,
   "vars": {
     "ALLOWED_ORIGINS": "*",
-    "METADATA_FEEDS": "[]"
+    "METADATA_FEEDS": "[]",
+    "UPSTREAM_SYNC_ENABLED": "true",
+    "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\"]"
   },
   "secrets": {
     "required": ["METADATA_UPDATE_TOKEN"]
