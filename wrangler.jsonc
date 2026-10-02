@@ -8,7 +8,7 @@
   "workers_dev": true,
   "routes": [{ "pattern": "gachameta.lucas04.top", "custom_domain": true }],
   "vars": {
-    "ALLOWED_ORIGINS": "*.lucas04.top",
+    "ALLOWED_ORIGINS": "*.lucas04.top, 127.0.0.1, localhost",
     "METADATA_FEEDS": "[]",
     "UPSTREAM_SYNC_ENABLED": "true",
     "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]"
