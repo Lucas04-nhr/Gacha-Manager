@@ -257,6 +257,40 @@ test("origin allowlist rejects unlisted browser origins", async () => {
   }
 });
 
+test("hostname rules allow local ports and bounded subdomains for GET, HEAD and preflight", async () => {
+  const restricted = new Miniflare(convertV4MiniflareOptions({
+    ...options,
+    bindings: { ALLOWED_ORIGINS: "*.lucas04.top, 127.0.0.1, localhost" },
+  }));
+  try {
+    for (const origin of ["http://127.0.0.1:8085", "http://localhost:8085", "https://localhost:3000", "https://blog.lucas04.top", "https://nested.blog.lucas04.top"]) {
+      for (const method of ["GET", "HEAD", "OPTIONS"]) {
+        const response = await restricted.dispatchFetch("https://worker.test/api/v1/games", {
+          method,
+          headers: { Origin: origin, ...(method === "OPTIONS" ? { "Access-Control-Request-Method": "GET" } : {}) },
+        });
+        assert.equal(response.status, method === "OPTIONS" ? 204 : 200);
+        assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
+        assert.equal(response.headers.get("Access-Control-Allow-Credentials"), null);
+        assert.equal(response.headers.get("Vary"), "Origin");
+      }
+    }
+    for (const origin of ["https://lucas04.top", "https://evillucas04.top", "https://blog.lucas04.top.evil.test", "http://localhost.evil.test:8085", "http://127.0.0.2:8085", "http://127.0.0.1:8085/path", "http://user@localhost:8085", "ftp://localhost", "null"]) {
+      const response = await restricted.dispatchFetch("https://worker.test/api/v1/games", { headers: { Origin: origin } });
+      assert.equal(response.status, 403);
+      assert.equal(response.headers.get("Access-Control-Allow-Origin"), null);
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+    }
+    const admin = await restricted.dispatchFetch("https://worker.test/api/v1/admin/metadata", {
+      method: "POST", headers: { Origin: "http://127.0.0.1:8085" },
+    });
+    assert.equal(admin.status, 403);
+    assert.equal(admin.headers.get("Access-Control-Allow-Origin"), null);
+  } finally {
+    await restricted.dispose();
+  }
+});
+
 test("missing schema yields sanitized 503 instead of pretending the item is unknown", async () => {
   const empty = new Miniflare(
     convertV4MiniflareOptions({

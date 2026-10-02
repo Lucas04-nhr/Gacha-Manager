@@ -112,12 +112,31 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   return json({ game, lang, items: entries, data, missing_ids: ids.filter(id => !byId.has(id)) }, 200, 'public, max-age=300');
 }
 
+function originAllowed(origin: string, rules: string[]): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) return false;
+  return rules.some(rule => {
+    if (rule === origin) return true;
+    if (rule === 'localhost' || rule === '127.0.0.1') return url.hostname === rule;
+    if (rule.startsWith('*.')) {
+      const domain = rule.slice(2).toLowerCase();
+      return /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(domain) && url.hostname.endsWith(`.${domain}`);
+    }
+    return false;
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const origin = request.headers.get('Origin');
     const origins = env.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean);
     const wildcard = origins.includes('*');
-    const allowed = !origin || wildcard || origins.includes(origin);
+    const allowed = !origin || wildcard || originAllowed(origin, origins);
     let response: Response;
     try {
       if (!allowed) fail(403, 'ORIGIN_NOT_ALLOWED', 'Origin is not allowed.');

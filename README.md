@@ -44,7 +44,7 @@ These public sources change over time and do not guarantee coverage of every gac
 
 The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is currently maintained. Migration `0003_remove_gacha_type.sql` removes the unused `gacha_type` column and restricts rows to items while preserving existing metadata. Migration `0002_item_details.sql` adds unified type and icon fields. Apply all migrations before deployment.
 
-`ALLOWED_ORIGINS` defaults to `*` and can be changed to a comma-separated list of complete blog origins. Public API requests omit credentials; CORS origin restrictions are not authentication. The admin API uses the separate secret `METADATA_UPDATE_TOKEN`, which must never be included in the blog frontend.
+`ALLOWED_ORIGINS` is a comma-separated allowlist. The checked-in configuration uses `*.lucas04.top, 127.0.0.1, localhost`: the wildcard matches subdomains on HTTP/HTTPS, and the two local host rules allow HTTP/HTTPS on any port (including `http://127.0.0.1:8085`). Complete origins such as `https://blog.example.com` match exactly, including the port; `*` permits all origins. Subdomain rules do not include the bare domain or similarly named domains. Public API requests omit credentials; CORS origin restrictions are not authentication. The admin API uses the separate secret `METADATA_UPDATE_TOKEN`, which must never be included in the blog frontend.
 
 ## Local development
 
