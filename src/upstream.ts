@@ -279,17 +279,25 @@ export function upstreamJobs(env: { UPSTREAM_SYNC_ENABLED: string; UPSTREAM_LANG
     jobs.push({ game: 'hk4e_ugc', lang, load: async () => {
       const primary = await loadOutfits();
       costumeHashes ??= (async () => {
-        const values = await download(`${dimbreath.hk4e}/ExcelBinOutput/BeyondCostumeExcelConfigData.json`, 8 * 1024 * 1024);
-        if (!Array.isArray(values) || !values.length) throw new Error('Invalid outfit configuration');
         const wanted = new Set(primary.entries.map(row => row.item_id));
         const hashes = new Map<string, string>();
-        for (const value of values) {
-          const row = object(value);
-          const id = key(row.costumeId);
-          const hash = key(row.nameTextMapHash);
-          if (!id || !wanted.has(id) || !hash || !/^\d{1,20}$/.test(hash)) continue;
-          if (hashes.has(id) && hashes.get(id) !== hash) throw new Error('Conflicting outfit name hashes');
-          hashes.set(id, hash);
+        const configurations = [
+          { file: 'BeyondCostumeExcelConfigData.json', idField: 'costumeId' },
+          // Verified drawing item ID field in Dimbreath's current obfuscated schema.
+          { file: 'BeyondCostumeDrawingExcelConfigData.json', idField: 'FHIDKAKGMFN' },
+        ];
+        for (const configuration of configurations) {
+          const values = await download(`${dimbreath.hk4e}/ExcelBinOutput/${configuration.file}`, 8 * 1024 * 1024);
+          if (!Array.isArray(values) || !values.length) throw new Error('Invalid outfit configuration');
+          for (const value of values) {
+            const row = object(value);
+            const id = key(row[configuration.idField]);
+            const hash = key(row.nameTextMapHash);
+            if (!id) throw new Error('Unrecognized outfit ID field');
+            if (!wanted.has(id) || !hash || !/^\d{1,20}$/.test(hash)) continue;
+            if (hashes.has(id) && hashes.get(id) !== hash) throw new Error('Conflicting outfit name hashes');
+            hashes.set(id, hash);
+          }
         }
         return hashes;
       })();
@@ -302,7 +310,7 @@ export function upstreamJobs(env: { UPSTREAM_SYNC_ENABLED: string; UPSTREAM_LANG
         return title ? [{ ...row, lang, name: title }] : [];
       });
       console.log(JSON.stringify({ event: 'metadata_unresolved', game: 'hk4e_ugc', lang, items: primary.entries.length - entries.length }));
-      return entries.length ? { source: `${dimbreath.hk4e}/ExcelBinOutput/BeyondCostumeExcelConfigData.json`, entries } : null;
+      return entries.length ? { source: `${dimbreath.hk4e}/ExcelBinOutput`, entries } : null;
     } });
   }
   return jobs;

@@ -107,10 +107,12 @@ test('UGC fallback localizes only Starward IDs and shares configuration across l
     assert.equal(init.redirect, 'manual');
     if (url.endsWith('GenshinBeyondGachaInfo.json')) return Response.json([
       { Id: 260001, Name: '中文衣装', Rank: 2, Icon: 'https://example.com/outfit.png' },
+      { Id: 275016, Name: '测试套装形录', Rank: 4, Icon: 'https://example.com/catalog.png' },
       { Id: 260003, Name: '相关奖励', Rank: 0, Icon: 'https://example.com/reward.png' },
     ]);
     if (url.endsWith('BeyondCostumeExcelConfigData.json')) return new Response('[{"costumeId":260001,"nameTextMapHash":6186714091647966180},{"costumeId":260002,"nameTextMapHash":123}]');
-    if (url.endsWith('TextMapEN.json')) return Response.json({ '6186714091647966180': 'Outfit', 123: 'Not in primary' });
+    if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return Response.json([{ FHIDKAKGMFN: 275016, nameTextMapHash: 3481381737 }, { FHIDKAKGMFN: 275017, nameTextMapHash: 123 }]);
+    if (url.endsWith('TextMapEN.json')) return Response.json({ 3481381737: 'Synthetic catalog', '6186714091647966180': 'Outfit', 123: 'Not in primary' });
     if (url.endsWith('TextMapJP.json')) return Response.json({ '6186714091647966180': '衣装' });
     if (url.endsWith('TextMapCHT.json')) return Response.json({});
     throw new Error('Unexpected request');
@@ -122,7 +124,13 @@ test('UGC fallback localizes only Starward IDs and shares configuration across l
     assert.equal(calls.length, 1);
     for (const job of jobs.slice(1, 3)) {
       const result = validateMetadata(await job.load());
-      assert.equal(result.entries.length, 1);
+      assert.equal(result.entries.length, job.lang === 'en-us' ? 2 : 1);
+      if (job.lang === 'en-us') {
+        assert.equal(result.entries[1].entity_id, '275016');
+        assert.equal(result.entries[1].name, 'Synthetic catalog');
+        assert.equal(result.entries[1].rank_type, '4');
+        assert.equal(result.entries[1].icon, chinese.entries[1].icon);
+      }
       assert.equal(result.entries[0].entity_id, '260001');
       assert.equal(result.entries[0].lang, job.lang);
       assert.equal(result.entries[0].rank_type, '2');
@@ -132,11 +140,30 @@ test('UGC fallback localizes only Starward IDs and shares configuration across l
     assert.equal(await jobs[3].load(), null);
     assert.equal(calls.filter(url => url.endsWith('GenshinBeyondGachaInfo.json')).length, 1);
     assert.equal(calls.filter(url => url.endsWith('BeyondCostumeExcelConfigData.json')).length, 1);
+    assert.equal(calls.filter(url => url.endsWith('BeyondCostumeDrawingExcelConfigData.json')).length, 1);
     calls.length = 0;
     globalThis.fetch = async input => { calls.push(String(input)); return new Response(null, { status: 302 }); };
     const failed = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' }).filter(job => job.game === 'hk4e_ugc');
     for (const job of failed) await assert.rejects(job.load());
     assert.equal(calls.length, 1);
     assert.equal(calls[0].includes('Dimbreath'), false);
+  } finally { globalThis.fetch = original; }
+});
+
+test('UGC drawing schema changes fail explicitly instead of silently dropping translations', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = String(input);
+    if (url.endsWith('GenshinBeyondGachaInfo.json')) return Response.json([
+      { Id: 275016, Name: '测试形录', Rank: 4, Icon: 'https://example.com/catalog.png' },
+    ]);
+    if (url.endsWith('BeyondCostumeExcelConfigData.json')) return Response.json([{ costumeId: 260001, nameTextMapHash: 123 }]);
+    if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return Response.json([{ changedField: 275016, nameTextMapHash: 3481381737 }]);
+    throw new Error('Unexpected request');
+  };
+  try {
+    const job = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' })
+      .find(job => job.game === 'hk4e_ugc' && job.lang === 'en-us');
+    await assert.rejects(job.load(), /Unrecognized outfit ID field/);
   } finally { globalThis.fetch = original; }
 });

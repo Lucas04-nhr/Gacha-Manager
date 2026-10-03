@@ -16,7 +16,7 @@ Unified item schema: { id, name, rank, type, icon }
 Dimbreath: on-demand completion of missing Enka fields only
 
 Starward public static metadata → Bangboo / Miliastra outfits
-Dimbreath outfit configuration + TextMaps → missing Miliastra language names
+Dimbreath outfit/catalog configurations + TextMaps → missing Miliastra language names
                  ↓
 Existing D1 gacha_meta → Public query API
 ```
@@ -30,7 +30,7 @@ If the primary download fails, Dimbreath does not replace the entire source. Ent
 Special items follow the public metadata sources used by [Starward](https://github.com/Scighost/Starward):
 
 - **Bangboo:** `https://starward-static.scighost.com/metadata/v1/zzz/ZZZGachaInfo.nap_global.<lang>.json`. Only Bangboo IDs in the `5xxxx` range are imported, with type `bangboo`. Agents and W-Engines remain managed through Enka.
-- **Miliastra Wonderland outfits:** `https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json`, stored in the separate `hk4e_ugc` table. Starward provides the authoritative Chinese names, ranks and icons under `zh-cn`. For other configured `UPSTREAM_LANGUAGES`, Dimbreath `BeyondCostumeExcelConfigData.json` maps matching `costumeId` values to `nameTextMapHash`, and streamed language TextMaps supply localized names. Chinese values are never overwritten or relabeled. Unmapped related rewards and missing translations are skipped with count-only logs; historical rows are retained. A failed Starward source does not trigger a Dimbreath-only import. Unchanged metadata rows are not rewritten, preserving their `updated_at`; `updated` counts actual inserted or changed rows. Upstream dictionaries are still checked on each sync so corrected translations can be discovered. The list includes outfits and related rewards, using the generic type `ugc_item`. Unnamed entries are skipped.
+- **Miliastra Wonderland outfits:** `https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json`, stored in the separate `hk4e_ugc` table. Starward provides the authoritative Chinese names, ranks and icons under `zh-cn`. For other configured `UPSTREAM_LANGUAGES`, Dimbreath `BeyondCostumeExcelConfigData.json` maps matching `costumeId` values to `nameTextMapHash`; `BeyondCostumeDrawingExcelConfigData.json` also maps set catalog IDs using the verified `FHIDKAKGMFN` field. Both tables are restricted to Starward item IDs, and streamed language TextMaps supply localized names. Chinese values are never overwritten or relabeled. Unmapped related rewards and missing translations are skipped with count-only logs; historical rows are retained. A failed Starward source does not trigger a Dimbreath-only import. Unchanged metadata rows are not rewritten, preserving their `updated_at`; `updated` counts actual inserted or changed rows. Upstream dictionaries are still checked on each sync so corrected translations can be discovered. The list includes outfits and related rewards, using the generic type `ugc_item`. Unnamed entries are skipped.
 
 These public sources change over time and do not guarantee coverage of every gacha item. Enka stores also contain items that are not obtainable through gacha. The API looks up metadata by ID; it does not determine whether an item is available in a current banner.
 

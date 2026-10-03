@@ -219,9 +219,10 @@ test('authenticated sync fetches processed stores and special feeds into unified
       { id: 1011, name: 'must not overwrite Enka', rarity: 3, icon: 'https://example.com/agent.png' },
       { id: 54001, name: 'Buddy', rarity: 4, icon: 'https://example.com/buddy.png' },
     ] } },
+    '/BeyondCostumeDrawingExcelConfigData.json': [{ FHIDKAKGMFN: 275016, nameTextMapHash: 3481381737 }],
     '/BeyondCostumeExcelConfigData.json': [{ costumeId: 260001, nameTextMapHash: '6186714091647966180' }],
-    '/TextMapEN.json': { '6186714091647966180': 'Localized outfit' },
-    '/GenshinBeyondGachaInfo.json': [{ Id: 260001, Name: '衣装', Rank: 2, Icon: 'https://example.com/outfit.png' }, { Id: 260002, Name: '', Rank: 2, Icon: 'https://example.com/unknown.png' }],
+    '/TextMapEN.json': { '6186714091647966180': 'Localized outfit', 3481381737: 'Synthetic catalog' },
+    '/GenshinBeyondGachaInfo.json': [{ Id: 275016, Name: '测试形录', Rank: 4, Icon: 'https://example.com/catalog.png' }, { Id: 260001, Name: '衣装', Rank: 2, Icon: 'https://example.com/outfit.png' }, { Id: 260002, Name: '', Rank: 2, Icon: 'https://example.com/unknown.png' }],
   };
   const calls = [];
   const sync = new Miniflare(convertV4MiniflareOptions({ ...options,
@@ -240,15 +241,17 @@ test('authenticated sync fetches processed stores and special feeds into unified
     assert.equal((await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST' })).status, 401);
     const response = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { updated: 9, sources: 6 });
-    assert.equal(calls.length, 13);
-    assert.equal(calls.filter(url => url.includes('Dimbreath')).length, 2);
+    assert.deepEqual(await response.json(), { updated: 11, sources: 6 });
+    assert.equal(calls.length, 14);
+    assert.equal(calls.filter(url => url.includes('Dimbreath')).length, 3);
     const query = async (game, ids, lang = 'en-us') => (await sync.dispatchFetch(`https://worker.test/api/v1/items?game=${game}&lang=${lang}&ids=${ids}`)).json();
     const zzz = await query('nap', '1011,54001');
     assert.equal(zzz.data['1011'].name, 'Anby');
     assert.deepEqual(zzz.data['54001'], { name: 'Buddy', rank: 5, type: 'bangboo', icon: 'https://example.com/buddy.png' });
     assert.equal((await query('hk4e_ugc', '260001', 'zh-cn')).data['260001'].rank, 2);
     assert.equal((await query('hk4e_ugc', '260001')).data['260001'].name, 'Localized outfit');
+    assert.equal((await query('hk4e_ugc', '275016')).data['275016'].name, 'Synthetic catalog');
+    assert.deepEqual((await query('hk4e', '275016')).missing_ids, ['275016']);
     const before = (await query('hk4e_ugc', '260001')).items[0].updated_at;
     const repeated = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     assert.equal(repeated.status, 200);
