@@ -51,7 +51,8 @@ The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is cur
 
 ## Personal remote synchronization
 
-仅供个人使用：只能同步到自己部署并管理的 Worker 和 D1。填写他人提供的 Worker 地址或 token，可能导致账号信息和抽卡记录泄漏。服务部署者以及持有 token 的人可以读取、修改或删除全部同步数据。允许的 CORS 来源也必须提供 token。
+> [!CAUTION]
+> **For personal use only**: You can only sync to Workers and D1 that you have deployed and manage yourself. Filling in the Worker address or token provided by others may lead to leaks of account information and gacha records. Service deployers and those holding tokens can read, modify, or delete all synchronized data. The allowed CORS origin must also provide a token.
 
 On your own deployment, apply all migrations and configure a separate secret with [Wrangler secrets](https://developers.cloudflare.com/workers/configuration/secrets/):
 
