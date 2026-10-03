@@ -270,13 +270,18 @@ First verify the output in **local D1**, after applying local migrations:
 
 ```fish
 /opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --local
-for file in metadata-download-first/*.sql
-    /opt/homebrew/bin/wrangler d1 execute gacha_meta --local --file "$file"
-    or break
-end
+npm run metadata:upload -- --input metadata-download-first --local
 ```
 
-Query representative IDs/names in every game and language using the local Worker. Once validated, importing the same SQL into remote D1 is a separate operator action: replace `--local` with `--remote`. Each file is a separate import, so an interrupted import may leave earlier batches committed; the generated upserts can be reapplied without deleting absent items or changing personal records. Do not load synthetic test fixtures into remote D1. Public query caches may take five minutes to expire.
+Query representative IDs/names in every game and language using the local Worker. Once validated, upload the same batches to remote D1 without repeated confirmation prompts:
+
+```fish
+npm run metadata:upload -- --input metadata-download-first
+```
+
+This command targets **remote `gacha_meta` by default** and passes `--yes` to Wrangler. It checks the complete manifest, record counts, game/language identity, size limits and every SQL file against regenerated validated metadata before the first write. It uploads only manifest-listed batches, using temporary copies, sequentially and stops on the first failure. It requires Wrangler's Cloudflare login, not `METADATA_UPDATE_TOKEN`. On macOS it uses `/opt/homebrew/bin/wrangler`; on other systems it uses `wrangler` from PATH. Use `--dry-run` to validate all artifacts without database writes; use `--local` for local D1. No migrations or Worker deployment are performed.
+
+Each file is a separate import, so an interrupted import may leave earlier batches committed; the generated upserts can be reapplied without deleting absent items or changing personal records. Do not load synthetic test fixtures into remote D1. Public query caches may take five minutes to expire.
 
 The browser's **Update metadata** button and existing Cron still run the original Worker-side job and can still hit resource limits; this local command does not change them or deploy a Worker. GitHub Actions integration is deferred until the local workflow has been verified.
 
