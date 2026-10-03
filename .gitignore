@@ -13,3 +13,6 @@ dist/
 # macOS Resources
 .DS_Store
 ._*
+
+# Local public metadata download artifacts
+/metadata-download*/

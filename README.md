@@ -254,6 +254,32 @@ console.log(await response.json());
 
 For offline maintenance, run `npm run metadata:sql -- metadata.json metadata.sql` to validate metadata and generate SQL, then import it locally with `wrangler d1 execute gacha_meta --local --file metadata.sql`. The script does not access the network or overwrite an existing output file. Generated `/metadata.sql` at the repository root is ignored; migration and test sources remain under version control.
 
+### Local upstream download (avoids Worker error 1102)
+
+Use Node.js 22.18+ to download and parse public upstream data locally, then generate validated JSON and SQL batches (at most 500 rows and 900 KiB each). This reuses the Worker's adapters, preserves 64-bit IDs, separates games/languages and performs no database writes. No token is required. Extra deployment-configured `METADATA_FEEDS` are not included.
+
+```fish
+npm run metadata:download -- --output metadata-download-first
+# Optional smaller run:
+npm run metadata:download -- --output metadata-download-gi-zh --games hk4e --languages zh-cn
+```
+
+The output directory must be new and its parent must exist. Each source is processed sequentially. Inspect `manifest.json`: `complete` must be true and no task may have status `failed` before a full import. `skipped` means no resolved translation; preserve existing rows. A nonzero exit means the run is incomplete; do not blindly import its SQL glob. Retry into a new directory. Generated artifacts are ignored by Git when using the `metadata-download*` directory naming above.
+
+First verify the output in **local D1**, after applying local migrations:
+
+```fish
+/opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --local
+for file in metadata-download-first/*.sql
+    /opt/homebrew/bin/wrangler d1 execute gacha_meta --local --file "$file"
+    or break
+end
+```
+
+Query representative IDs/names in every game and language using the local Worker. Once validated, importing the same SQL into remote D1 is a separate operator action: replace `--local` with `--remote`. Each file is a separate import, so an interrupted import may leave earlier batches committed; the generated upserts can be reapplied without deleting absent items or changing personal records. Do not load synthetic test fixtures into remote D1. Public query caches may take five minutes to expire.
+
+The browser's **Update metadata** button and existing Cron still run the original Worker-side job and can still hit resource limits; this local command does not change them or deploy a Worker. GitHub Actions integration is deferred until the local workflow has been verified.
+
 Test Cron locally:
 
 ```sh
