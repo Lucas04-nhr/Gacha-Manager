@@ -59,8 +59,6 @@ Run `npm ci`, `npm run types`, `npm run check` and `npm test`. Tests build the W
 
 Do not claim cloud deployment, remote migrations or complete metadata coverage based on local tests. State precisely what was verified. Keep README API examples and the served documentation consistent with actual responses. Preserve unrelated user changes and the existing license.
 
-## Releases and collaboration attribution
+## Release notes
 
 Keep GitHub Release notes focused on user-visible changes and necessary upgrade/setup steps. Do not include validation paragraphs, test counts, command/check lists, or local verification reports in Release notes; report those in the conversation instead.
-
-For every Release created or edited by Codex, include `Co-authored-by: Codex <noreply@openai.com>` at the end of its notes. Include the same trailer in commits created for a release or an explicitly requested push, unless the user requests otherwise. GitHub's Release author remains the publishing account; the trailer credits Codex as a collaborator.
