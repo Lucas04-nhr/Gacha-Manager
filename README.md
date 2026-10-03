@@ -2,7 +2,9 @@
 
 A Cloudflare Worker that serves public item metadata to a blog's gacha record management page. The frontend sends a game, language and item IDs; the Worker queries the existing D1 database `gacha_meta` and returns names, rarity, types and icons.
 
-This repository handles public metadata queries and maintenance only. The frontend handles user records, UIGF import/export, link parsing, incremental fetching, display and local storage. The Worker does not accept UIDs, cookies, authkeys, user records or authorization links. It has no account system and does not maintain banner schedules.
+This repository handles public metadata queries and maintenance, plus optional **personal remote synchronization** of already saved records. The frontend handles UIGF import/export, link parsing, incremental fetching, display and local storage. Only the authenticated personal sync endpoint accepts UIDs and normalized records. The Worker never accepts cookies, game authkeys, history URLs or uploaded archives. It has no multi-user account system and does not maintain banner schedules.
+
+**Personal sync is for a single owner, using only their own self-deployed Worker and D1 database. Using someone else's Worker URL or token can leak your account information and gacha records.** A token does not make an untrusted server safe: its operator and anyone holding the personal sync token can read, modify and delete all synchronized data. Do not use the public metadata service as a shared personal-storage service or embed a personal token in published frontend code.
 
 ## Data sources and architecture
 
@@ -34,7 +36,7 @@ These public sources change over time and do not guarantee coverage of every gac
 
 ## Bindings and tables
 
-`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. This project uses D1 for public item metadata storage.
+`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. D1 stores public metadata and, when explicitly enabled with a personal secret, separate personal records. R2 is not required. Migration `0004_personal_sync.sql` adds `personal_sync_state`, `personal_sync_accounts` and `personal_sync_records`; the four metadata tables remain separate. Old migrations are unchanged.
 
 | `game`     | Separate D1 table  | Content                                      |
 | ---------- | ------------------ | -------------------------------------------- |
@@ -47,19 +49,74 @@ The primary key is `(namespace, kind, lang, entity_id)`. Only `kind=item` is cur
 
 `ALLOWED_ORIGINS` is a comma-separated allowlist. The checked-in configuration uses `*.lucas04.top, 127.0.0.1, localhost`: the wildcard matches subdomains on HTTP/HTTPS, and the two local host rules allow HTTP/HTTPS on any port (including `http://127.0.0.1:8085`). Complete origins such as `https://blog.example.com` match exactly, including the port; `*` permits all origins. Subdomain rules do not include the bare domain or similarly named domains. Public API requests omit credentials; CORS origin restrictions are not authentication. The admin API uses the separate secret `METADATA_UPDATE_TOKEN`, which must never be included in the blog frontend.
 
+## Personal remote synchronization
+
+仅供个人使用：只能同步到自己部署并管理的 Worker 和 D1。填写他人提供的 Worker 地址或 token，可能导致账号信息和抽卡记录泄漏。服务部署者以及持有 token 的人可以读取、修改或删除全部同步数据。允许的 CORS 来源也必须提供 token。
+
+On your own deployment, apply all migrations and configure a separate secret with [Wrangler secrets](https://developers.cloudflare.com/workers/configuration/secrets/):
+
+```sh
+/opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --remote
+/opt/homebrew/bin/wrangler secret put PERSONAL_SYNC_TOKEN
+/opt/homebrew/bin/wrangler deploy
+```
+
+These commands change your remote deployment; local checks do not execute them. Choose a random secret of 32–512 non-whitespace characters. Missing or invalid secrets disable personal sync with 503, without disabling public metadata queries. For local development put a synthetic token in ignored `.dev.vars`. Token rotation changes access credentials, preserves stored records and does not create another owner. `METADATA_UPDATE_TOKEN` is separate, and must never be used by browser clients.
+
+All operations use `POST /api/v1/personal/sync`, `Authorization: Bearer <your-personal-token>` and `Content-Type: application/json`. No URL parameters, cookies, encoded bodies or credentials in URLs. Responses, including reads, use `Cache-Control: no-store`. Browser POST preflight supports only `Authorization` and `Content-Type`; configure `ALLOWED_ORIGINS` for your frontend. `*` alone does not allow browser access to personal sync. There is no token exemption for an allowed origin. Public metadata CORS and server-only admin endpoints keep their existing behavior.
+
+| Action | JSON body fields | Response |
+| --- | --- | --- |
+| `list` | `action`, optional `limit`, `after` | `{ revision, accounts: [{ game, uid, timezone }], next }` |
+| `read` | `action`, `game`, `uid`, optional `limit`, `after` | `{ revision, account: { game, uid, timezone } or null, list: [...], next }` |
+| `write` | `action`, `game`, `uid`, `timezone`, `revision`, `list`, optional `delete_ids` | `{ revision }` |
+| `delete_account` | `action`, `game`, `uid`, `revision` | `{ revision }` |
+
+`game` is `hk4e`, `hk4e_ugc`, `hkrpg` or `nap`; namespaces are isolated even for the same UID/record ID. UID and all IDs must be decimal **strings**, at most 20 digits. UID, record ID and item ID are normalized with `BigInt` (leading zeros are removed); other raw fields are retained as strings. `timezone` is an integer from -12 to 14. Record fields are allowlisted: required `id`, `item_id`, `time`; optional decimal strings `gacha_type`, `uigf_gacha_type`, `gacha_id`, `count`, `rank_type`, `schedule_id`, `op_gacha_type`. Time must be a valid `YYYY-MM-DD HH:mm:ss` server-local timestamp. Non-UGC records require `gacha_type`; GI additionally requires matching `uigf_gacha_type` (400 maps to 301), HSR requires `gacha_id`, and UGC requires `schedule_id`, `op_gacha_type`, `rank_type`. Provided raw ranks must be GI/HSR 3/4/5, ZZZ 2/3/4, UGC 0–5. Sync stores raw ranks without display conversion, as informed by the [UIGF standard](https://uigf.org/en/standards/uigf.html).
+
+Localized names, item types, language, arbitrary extra fields, authkeys, cookies, URLs and archive objects are rejected. The frontend must prepare normalized saved records rather than upload an entire UIGF archive. `write` creates or updates account metadata, upserts complete records by ID and deletes only explicit `delete_ids`. Omitted records remain stored; account removal deletes its records. Duplicate normalized IDs and overlapping upsert/delete IDs are rejected. Payloads are bounded to 1 MiB and 2000 combined record upserts/deletions per write, with at most 500 records/accounts per read page (default 100). Large histories use multiple write batches and read pages; use each successful write's returned revision for the next batch. Multiple HTTP batches are independent transactions.
+
+`revision` is the global personal-store version, shared across all accounts. It starts at `0` for an untouched store. Each successful write uses a server-generated millisecond UNIX timestamp, `max(Date.now(), previous_revision + 1)`, to remain strictly increasing during same-millisecond writes or clock rollback. Treat it as an opaque synchronization version; do not generate it on the client. Read the remote version before writing and send it unchanged. Version mismatch returns **409 `SYNC_CONFLICT`** with no writes. Re-read and reconcile local changes before retrying; never blindly overwrite with a fresh revision. Account deletion also advances the global version, so stale clients cannot recreate deleted data using an old version.
+
+Reads return `next: null` on the last page. For `list`, pass the returned `game:uid` cursor as `after`; for `read`, pass the returned record ID. Records are ordered by numeric ID without converting IDs to JavaScript numbers. Every page returns the global revision: if it changes between pages, restart the download to obtain a consistent store view. A missing/deleted account returns `account: null` and `list: []`. Writes validate the full payload before submitting a single [D1 transactional batch](https://developers.cloudflare.com/d1/worker-api/d1-database/); revision comparison, record edits and deletion commit together or roll back together.
+
+Example first write after reading `{ "revision": 0, "accounts": [], "next": null }`:
+
+```json
+{
+  "action": "write",
+  "game": "hk4e",
+  "uid": "123456789",
+  "timezone": 8,
+  "revision": 0,
+  "list": [{
+    "id": "9007199254740993",
+    "item_id": "10000003",
+    "time": "2026-10-03 12:00:00",
+    "gacha_type": "301",
+    "uigf_gacha_type": "301",
+    "rank_type": "5"
+  }],
+  "delete_ids": []
+}
+```
+
+The successful response contains a new timestamp version, for example `{ "revision": 1791028800000 }`. For record deletion, submit `write` with an empty `list` and the IDs in `delete_ids`, using the latest revision. This backend provides storage and conflict detection; frontend sync controls and automatic reconciliation are not implemented in this repository.
+
 ## Local development
 
-All Wrangler commands and npm scripts use the Homebrew-installed `wrangler`.
+For local Wrangler operations use `/opt/homebrew/bin/wrangler`. The portable package `build` script remains available for Cloudflare automatic builds; local verification uses the explicit executable below.
 
 Requires Node.js 22.18+ (or a newer version supported by Wrangler) and npm.
 
 ```sh
 npm ci
-npm run types
+/opt/homebrew/bin/wrangler types
 npm run check
-npm run db:migrate:local
-npm run dev
-npm test
+/opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --local
+/opt/homebrew/bin/wrangler dev
+/opt/homebrew/bin/wrangler deploy --dry-run --outdir dist
+node --test test/*.test.mjs
 ```
 
 Open `http://localhost:8787/` for the plain-text welcome message and documentation link. Development uses local D1 by default and does not modify the production database. Migrations do not populate metadata; empty tables correctly return `missing_ids`. `npm run build` performs a deployment dry run without publishing the Worker. Tests use local workerd/D1 and mocked upstream sources; test fixtures must not be used in production.
@@ -128,7 +185,7 @@ if (!response.ok) throw new Error(`Metadata API: ${response.status}`);
 const { data, missing_ids } = await response.json();
 ```
 
-Errors use `{ "error": { "code": "…", "message": "…" } }` with `no-store`: 400 for invalid parameters, 403 for rejected origins, 404 for unknown endpoints, 405 for unsupported methods, 414 for oversized queries, and 503 for database failures or missing migrations. SQL and raw exceptions are not exposed. Platform logs may still contain request information, so the frontend must send public query conditions only.
+Errors use `{ "error": { "code": "…", "message": "…" } }` with `no-store`: 400 for invalid parameters, 403 for rejected origins, 404 for unknown endpoints, 405 for unsupported methods, 414 for oversized queries, and 503 for database failures or missing migrations. SQL and raw exceptions are not exposed. Platform logs may still contain request information, so public metadata calls must send public query conditions only. Personal data belongs only in the authenticated sync POST body, never in URLs. Application logs do not include personal payloads, UIDs or tokens; platform request logging still exists.
 
 ## Scheduled synchronization and REST updates
 
@@ -208,10 +265,10 @@ curl 'http://localhost:8787/cdn-cgi/local/scheduled?cron=0+3+*+*+*'
 Source code and local verification do not imply that the Worker has been deployed or remote D1 has been modified. Maintainers can deploy with:
 
 ```sh
-wrangler login
-wrangler secret put METADATA_UPDATE_TOKEN
-npm run db:migrate:remote
-npm run deploy
+/opt/homebrew/bin/wrangler login
+/opt/homebrew/bin/wrangler secret put METADATA_UPDATE_TOKEN
+/opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --remote
+/opt/homebrew/bin/wrangler deploy
 ```
 
 The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
@@ -232,7 +289,7 @@ Thank you to the maintainers and contributors of the following projects for the 
 - [hoyo-buddy](https://github.com/seriaati/hoyo-buddy), by seriaati and contributors: a reference for HoYoverse game integrations and gacha data handling.
 - [UIGF](https://uigf.org/en/standards/uigf.html): the standard informing this service's game namespaces and raw item field semantics.
 
-The runtime data sources are listed separately from projects consulted for inspiration. This Worker implements its own public metadata API; user record management remains the responsibility of the frontend.
+The runtime data sources are listed separately from projects consulted for inspiration. This Worker implements its own public metadata API and optional personal record storage; parsing, display, local storage and synchronization reconciliation remain the responsibility of the frontend.
 
 ## License
 

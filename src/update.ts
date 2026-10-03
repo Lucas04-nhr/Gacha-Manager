@@ -19,7 +19,7 @@ export async function readJson(body: ReadableStream<Uint8Array> | null): Promise
       const result = await reader.read();
       if (result.done) break;
       bytes += result.value.byteLength;
-      if (bytes > maxBytes) throw new UpdateError(413, 'PAYLOAD_TOO_LARGE', 'Metadata payload exceeds 1 MiB.');
+      if (bytes > maxBytes) throw new UpdateError(413, 'PAYLOAD_TOO_LARGE', 'JSON payload exceeds 1 MiB.');
       chunks.push(result.value);
     }
   } finally {

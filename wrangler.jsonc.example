@@ -14,7 +14,7 @@
     "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]"
   },
   "secrets": {
-    "required": ["METADATA_UPDATE_TOKEN"]
+    "required": ["METADATA_UPDATE_TOKEN", "UPSTREAM_SYNC_TOKEN"]
   },
   "triggers": {
     "crons": ["0 3 * * *"]

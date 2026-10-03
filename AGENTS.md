@@ -2,14 +2,15 @@
 
 ## Scope and privacy
 
-This repository is a Cloudflare Workers backend for **public gacha item metadata queries and maintenance only**. The blog frontend owns UIGF file parsing, import/export, record storage, statistics, display and incremental history fetching. Do not implement those features here.
+This repository is a Cloudflare Workers backend for **public gacha item metadata queries and maintenance, plus optional personal remote record synchronization**. The blog frontend owns UIGF parsing, import/export, local storage, statistics, display and incremental history fetching. Do not implement those frontend features here.
 
-Never accept, store or log player UIDs, account identifiers, cookies, authkeys, user gacha records, uploaded archives or history URLs. Do not introduce account systems, history proxies, user-storage bindings or unauthenticated metadata writes. Blog API callers send only namespace, language and public item IDs. Operator POST updates require the `METADATA_UPDATE_TOKEN` secret and normalized public metadata, and must reject browser origins. Never embed this operator token in the blog frontend. Platform request logging still exists; do not describe the service as having no logs whatsoever.
+Public metadata callers send only namespace, language and public item IDs. Only the authenticated personal sync endpoint may accept player UIDs and normalized saved records, stored separately in personal tables. Personal synchronization is single-owner only, against the owner's self-deployed Worker and D1. Warn that using someone else's endpoint or token risks leaking account information and records; the operator and token holders can read and modify all synchronized data. Never accept cookies, authkeys, uploaded archives or history URLs; never log UIDs, tokens or records. Do not introduce multi-user account systems, history proxies or unauthenticated metadata writes. Operator POST metadata updates require `METADATA_UPDATE_TOKEN` and reject browser origins. Never embed that operator token in the frontend. Platform request logging still exists; do not claim the service has no logs.
 
 ## Architecture
 
 - `src/index.ts`: HTTP routing, validation, CORS, D1 queries and scheduled entry point.
 - `src/update.ts`: authenticated operator updates and scheduled built-in upstream and deployment-configured feed synchronization.
+- `src/personal-sync.ts`: token-authenticated, version-checked personal account/record CRUD; no history fetching or UIGF archive parsing.
 - `src/upstream.ts`: Enka processed stores, lazy Dimbreath field completion and Starward buddy/UGC adapters.
 - `src/metadata.mjs` and `src/metadata.d.mts`: shared metadata validation for Worker and offline operator tool, and its type contract. Keep them consistent.
 - `src/catalog.json`: namespace-to-table allowlist, languages and query limits, shared with the operator tool.
@@ -20,6 +21,8 @@ Never accept, store or log player UIDs, account identifiers, cookies, authkeys, 
 - `wrangler.jsonc`: source of truth for bindings. `worker-configuration.d.ts` is generated with `npm run types`; never edit it manually.
 
 Use the existing D1 database `gacha_meta` bound as `DB`. Do not create a replacement database. Account/database IDs in config are resource identifiers, not secrets. Local development and tests must use local D1; remote access is explicit.
+
+Personal sync uses separate `personal_sync_state`, `personal_sync_accounts` and `personal_sync_records` tables. Its global revision is a server-generated millisecond UNIX timestamp (initially 0), strictly increasing via `MAX(previous + 1, now)`. Every write compares the last-read revision and atomically commits or returns 409. Account deletion advances the version; never automatically retry stale writes without reconciliation. Keep tokens mandatory for allowed CORS origins. Requests are limited to 1 MiB and 2000 record operations, and reads to 500 entries per page. Accept only the documented normalized record fields, never arbitrary JSON or archives. Frontend synchronization controls remain out of scope here.
 
 ## Data contract
 
@@ -37,7 +40,7 @@ Only maintain public items (`kind=item`). Do not expose a pool schedule API or a
 Keep IDs and raw `rank_type` as strings. GI/HSR raw ranks are 3/4/5; ZZZ raw 2/3/4 maps to display 3/4/5. UGC Starward Rank 1–5 maps directly; 0/unknown is null. Types and icons belong to the unified schema; UGC may contain related rewards, so its generic category is `ugc_item`. Do not fabricate names or icons. Missing IDs and languages are explicit.
 
 Enka processed stores are primary for GI/HSR/ZZZ. Fetch Dimbreath only when Enka fields are missing; never overwrite a present Enka value or silently replace an unavailable primary source. Preserve 64-bit text hashes. Stream large flat localization dictionaries, retain only needed keys and enforce bounded size/time. Starward static metadata separately provides buddies (verified 5xxxx IDs only) and UGC (Chinese only). Skip unnamed/unresolved entries with fixed count logs, retain historical database rows and do not claim complete gacha coverage.
-Keep SQL table names exclusively in the static catalog allowlist and bind every request value using prepared statements. Bound query size must remain below D1's SQL parameter limit, including namespace/kind/language parameters. Reject unknown or repeated query parameters. Queries are GET/HEAD, with OPTIONS for CORS. Do not enable credentialed CORS. Origin restrictions are browser controls, not authentication.
+Keep metadata SQL table names exclusively in the static catalog allowlist; personal sync uses fixed literal table names. Bind every request value using prepared statements. Bound query size must remain below D1's SQL parameter limit, including namespace/kind/language parameters. Reject unknown or repeated query parameters. Public queries are GET/HEAD; personal CRUD uses authenticated POST, with OPTIONS for CORS. Personal sync requires a token even for allowed origins and rejects wildcard-only browser access. Do not enable credentialed CORS. Origin restrictions are browser controls, not authentication.
 
 Updates use a single D1 batch across affected tables, after full validation. JSON expansion bounds SQL parameters even for large payloads. Enforce 1 MiB/2000-entry HTTP and feed limits. Do not delete rows absent from a feed. Cron fetch URLs are deployment-controlled `METADATA_FEEDS`, never request-provided. Do not follow redirects, forward operator credentials or log payloads, feed URLs, tokens or raw errors. Attempt all configured feeds and report any failure to the scheduled runtime; each feed is atomic, multiple feeds are independent. Empty extra feeds do not disable built-in sources; `UPSTREAM_SYNC_ENABLED=false` disables built-in synchronization. Extra feeds use normalized item metadata.
 

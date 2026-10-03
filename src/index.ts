@@ -1,6 +1,7 @@
 import { apiPage } from './page';
 import catalog from './catalog.json';
 import { syncMetadata, updateRequest, UpdateError } from './update';
+import { personalSyncRequest } from './personal-sync';
 
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
@@ -136,13 +137,26 @@ export default {
     const origin = request.headers.get('Origin');
     const origins = env.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean);
     const wildcard = origins.includes('*');
-    const allowed = !origin || wildcard || originAllowed(origin, origins);
+    const personal = new URL(request.url).pathname === '/api/v1/personal/sync';
+    const allowed = !origin || (!personal && wildcard) || originAllowed(origin, origins);
     let response: Response;
     try {
       if (!allowed) fail(403, 'ORIGIN_NOT_ALLOWED', 'Origin is not allowed.');
       const url = new URL(request.url);
       if (url.search.length > 4096) fail(414, 'QUERY_TOO_LONG', 'Query is too long.');
-      if (['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(url.pathname)) {
+      if (personal) {
+        query(url, []);
+        if (request.method === 'OPTIONS') {
+          const method = request.headers.get('Access-Control-Request-Method');
+          const headers = request.headers.get('Access-Control-Request-Headers')?.split(',').map(value => value.trim().toLowerCase()) ?? [];
+          if ((method && method !== 'POST') || headers.some(value => !['authorization', 'content-type'].includes(value))) {
+            fail(405, 'METHOD_NOT_ALLOWED', 'Personal sync preflight permits POST with Authorization and Content-Type only.');
+          }
+          response = new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+        } else {
+          response = await personalSyncRequest(request, env);
+        }
+      } else if (['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(url.pathname)) {
         query(url, []);
         response = await updateRequest(request, env);
       } else if (request.method === 'OPTIONS') {
@@ -162,8 +176,8 @@ export default {
         response = json({ error: { code: error.code, message: error.message } }, error.status);
       } else {
         // Do not log URLs, SQL parameters, headers or request bodies.
-        console.error(JSON.stringify({ event: 'metadata_query_failed' }));
-        response = json({ error: { code: 'DATABASE_UNAVAILABLE', message: 'Metadata database is unavailable.' } }, 503);
+        console.error(JSON.stringify({ event: personal ? 'personal_sync_failed' : 'metadata_query_failed' }));
+        response = json({ error: { code: 'DATABASE_UNAVAILABLE', message: personal ? 'Personal sync database is unavailable.' : 'Metadata database is unavailable.' } }, 503);
       }
     }
     response.headers.set('X-Content-Type-Options', 'nosniff');
@@ -171,12 +185,13 @@ export default {
     response.headers.set('Vary', 'Origin');
     const admin = ['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(new URL(request.url).pathname);
     if (allowed && !admin) {
-      if (wildcard) response.headers.set('Access-Control-Allow-Origin', '*');
+      if (wildcard && !personal) response.headers.set('Access-Control-Allow-Origin', '*');
       else if (origin) response.headers.set('Access-Control-Allow-Origin', origin);
-      response.headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      response.headers.set('Access-Control-Allow-Methods', personal ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
+      if (personal) response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       response.headers.set('Access-Control-Max-Age', '86400');
     }
-    if (response.status === 405) response.headers.set('Allow', admin ? 'POST' : 'GET, HEAD, OPTIONS');
+    if (response.status === 405) response.headers.set('Allow', personal ? 'POST, OPTIONS' : admin ? 'POST' : 'GET, HEAD, OPTIONS');
     if (response.status === 401) response.headers.set('WWW-Authenticate', 'Bearer');
     return request.method === 'HEAD' ? new Response(null, response) : response;
   },
