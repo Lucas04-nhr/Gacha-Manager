@@ -14,7 +14,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply gacha_meta --remote",
     "metadata:sql": "node scripts/metadata-sql.mjs",
     "metadata:download": "node scripts/metadata-download.mjs",
-    "metadata:upload": "node scripts/metadata-upload.mjs"
+    "metadata:upload": "node scripts/metadata-upload.mjs",
+    "metadata:prune": "node scripts/metadata-prune.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

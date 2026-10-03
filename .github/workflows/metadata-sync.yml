@@ -1,0 +1,47 @@
+name: Sync public metadata
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-metadata-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check D1 upload credential
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'Configure the CLOUDFLARE_API_TOKEN Actions secret with D1 Edit access.' >&2
+            exit 1
+          fi
+      - run: npm ci
+      - name: Download and parse public metadata
+        run: npm run metadata:download -- --output metadata-download-actions
+      - name: Validate all upload batches
+        run: npm run metadata:upload -- --input metadata-download-actions --dry-run
+      - name: Upload public metadata to remote D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '2a190a563d8c90115322b4931de73d5c' }}
+        run: npm run metadata:upload -- --input metadata-download-actions
+      - name: Remove unsupported public metadata languages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '2a190a563d8c90115322b4931de73d5c' }}
+        run: npm run metadata:prune

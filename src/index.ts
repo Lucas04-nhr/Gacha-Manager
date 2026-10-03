@@ -1,6 +1,6 @@
 import { apiPage } from './page';
 import catalog from './catalog.json';
-import { syncMetadata, updateRequest, UpdateError } from './update';
+import { updateRequest, UpdateError } from './update';
 import { personalSyncRequest } from './personal-sync';
 
 const games = Object.keys(catalog.games);
@@ -192,8 +192,5 @@ export default {
     if (response.status === 405) response.headers.set('Allow', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
     if (response.status === 401) response.headers.set('WWW-Authenticate', 'Bearer');
     return request.method === 'HEAD' ? new Response(null, response) : response;
-  },
-  async scheduled(_controller, env): Promise<void> {
-    await syncMetadata(env);
   },
 } satisfies ExportedHandler<Env>;

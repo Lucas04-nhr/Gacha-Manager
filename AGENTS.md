@@ -8,14 +8,15 @@ Public metadata callers send only namespace, language and public item IDs. Only 
 
 ## Architecture
 
-- `src/index.ts`: HTTP routing, validation, CORS, D1 queries and scheduled entry point.
-- `src/update.ts`: authenticated operator updates and scheduled built-in upstream and deployment-configured feed synchronization.
+- `src/index.ts`: HTTP routing, validation, CORS, D1 queries and authenticated personal-sync routing.
+- `src/update.ts`: authenticated operator updates and manual built-in upstream and deployment-configured feed synchronization.
 - `src/personal-sync.ts`: token-authenticated, version-checked personal account/record CRUD; no history fetching or UIGF archive parsing.
 - `src/upstream.ts`: Enka processed stores, lazy Dimbreath field completion and Starward buddy/UGC adapters.
 - `src/metadata.mjs` and `src/metadata.d.mts`: shared metadata validation for Worker and offline operator tool, and its type contract. Keep them consistent.
 - `src/catalog.json`: namespace-to-table allowlist, languages and query limits, shared with the operator tool.
 - `src/page.ts`: exact plain-text welcome message at `/`, linking to the external documentation; no HTML or user-data forms.
 - `migrations/`: versioned D1 schema; do not edit a migration already applied to a shared database.
+- `.github/workflows/metadata-sync.yml`: daily/manual public metadata download, validation and D1 upload; no Worker Cron.
 - `scripts/metadata-sql.mjs`: offline, operator-only public metadata validation and upsert generation.
 - `test/`: workerd/Miniflare integration tests. Fixtures contain synthetic rows and must not be loaded into production.
 - `wrangler.jsonc`: source of truth for bindings. `worker-configuration.d.ts` is generated with `npm run types`; never edit it manually.
@@ -42,7 +43,7 @@ Keep IDs and raw `rank_type` as strings. GI/HSR raw ranks are 3/4/5; ZZZ raw 2/3
 Enka processed stores are primary for GI/HSR/ZZZ. Fetch Dimbreath only when Enka fields are missing; never overwrite a present Enka value or silently replace an unavailable primary source. Preserve 64-bit text hashes. Stream large flat localization dictionaries, retain only needed keys and enforce bounded size/time. Starward static metadata separately provides buddies (verified 5xxxx IDs only) and UGC (Chinese only). Skip unnamed/unresolved entries with fixed count logs, retain historical database rows and do not claim complete gacha coverage.
 Keep metadata SQL table names exclusively in the static catalog allowlist; personal sync uses fixed literal table names. Bind every request value using prepared statements. Bound query size must remain below D1's SQL parameter limit, including namespace/kind/language parameters. Reject unknown or repeated query parameters. Public queries are GET/HEAD; personal CRUD uses authenticated POST, with OPTIONS for CORS. Personal sync requires a token even for allowed origins and rejects wildcard-only browser access. Do not enable credentialed CORS. Origin restrictions are browser controls, not authentication.
 
-Updates use a single D1 batch across affected tables, after full validation. JSON expansion bounds SQL parameters even for large payloads. Enforce 1 MiB/2000-entry HTTP and feed limits. Do not delete rows absent from a feed. Cron fetch URLs are deployment-controlled `METADATA_FEEDS`, never request-provided. Do not follow redirects, forward operator credentials or log payloads, feed URLs, tokens or raw errors. Attempt all configured feeds and report any failure to the scheduled runtime; each feed is atomic, multiple feeds are independent. Empty extra feeds do not disable built-in sources; `UPSTREAM_SYNC_ENABLED=false` disables built-in synchronization. Extra feeds use normalized item metadata.
+Updates use a single D1 batch across affected tables, after full validation. JSON expansion bounds SQL parameters even for large payloads. Enforce 1 MiB/2000-entry HTTP and feed limits. Do not delete rows absent from a feed. Manual admin feed URLs are deployment-controlled `METADATA_FEEDS`, never request-provided. Do not follow redirects, forward operator credentials or log payloads, feed URLs, tokens or raw errors. Attempt all configured feeds and report any failure to the admin caller; each feed is atomic, multiple feeds are independent. Empty extra feeds do not disable built-in sources; `UPSTREAM_SYNC_ENABLED=false` disables built-in synchronization. Extra feeds use normalized item metadata.
 
 ## Wrangler executable
 

@@ -176,3 +176,44 @@ test('timestamp revision remains increasing if the clock is behind the previous 
   assert.equal((await response.json()).revision, future + 1);
   assert.equal((await post(write(future, [], { uid: '888' }))).status, 409);
 });
+
+test('authenticated first sync creates missing personal tables; unauthenticated calls create nothing', async () => {
+  const fresh = instance();
+  try {
+    const database = await fresh.getD1Database('DB');
+    const call = authorization => fresh.dispatchFetch('https://worker.test/api/v1/personal/sync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authorization }, body: JSON.stringify({ action: 'list' }),
+    });
+    assert.equal((await call('')).status, 401);
+    assert.equal((await database.prepare("SELECT count(*) AS count FROM sqlite_schema WHERE name LIKE 'personal_sync_%'").first()).count, 0);
+    const responses = await Promise.all([call(`Bearer ${token}`), call(`Bearer ${token}`)]);
+    for (const response of responses) {
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { revision: 0, accounts: [], next: null });
+    }
+    assert.equal((await database.prepare("SELECT count(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('personal_sync_state', 'personal_sync_accounts', 'personal_sync_records')").first()).count, 3);
+  } finally { await fresh.dispose(); }
+});
+
+test('repairing a missing records table preserves the existing revision and accounts', async () => {
+  const fresh = instance();
+  try {
+    const database = await fresh.getD1Database('DB');
+    const call = body => fresh.dispatchFetch('https://worker.test/api/v1/personal/sync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    });
+    assert.equal((await call({ action: 'list' })).status, 200);
+    const written = await call(write(0));
+    assert.equal(written.status, 200);
+    const revision = (await written.json()).revision;
+    await database.prepare('DROP TABLE personal_sync_records').run();
+    const list = await call({ action: 'list' });
+    assert.equal(list.status, 200);
+    const result = await list.json();
+    assert.equal(result.revision, revision);
+    assert.equal(result.accounts.length, 1);
+    assert.equal((await call({ action: 'read', game: 'hk4e', uid: '123456789' })).status, 200);
+    const reread = await call({ action: 'list' });
+    assert.equal((await reread.json()).revision, revision);
+  } finally { await fresh.dispose(); }
+});

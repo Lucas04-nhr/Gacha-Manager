@@ -36,7 +36,7 @@ These public sources change over time and do not guarantee coverage of every gac
 
 ## Bindings and tables
 
-`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. D1 stores public metadata and, when explicitly enabled with a personal secret, separate personal records. R2 is not required. Migration `0004_personal_sync.sql` adds `personal_sync_state`, `personal_sync_accounts` and `personal_sync_records`; the four metadata tables remain separate. Old migrations are unchanged.
+`wrangler.jsonc` binds the existing database `gacha_meta` as `DB`. D1 stores public metadata and, when explicitly enabled with a personal secret, separate personal records. R2 is not required. Migration `0004_personal_sync.sql` adds `personal_sync_state`, `personal_sync_accounts` and `personal_sync_records`; the four metadata tables remain separate. Authenticated personal sync checks these tables and creates any missing tables and initial state with idempotent SQL. Existing revisions and records are preserved; missing bindings or other database failures still return 503. Old migrations are unchanged.
 
 | `game`     | Separate D1 table  | Content                                      |
 | ---------- | ------------------ | -------------------------------------------- |
@@ -190,7 +190,7 @@ Errors use `{ "error": { "code": "…", "message": "…" } }` with `no-store`: 4
 
 ## Scheduled synchronization and REST updates
 
-The default Cron schedule is `0 3 * * *`, running daily at **03:00 UTC**. Deployment variables:
+Public metadata is synchronized by `.github/workflows/metadata-sync.yml` daily at **03:00 UTC** and on manual `workflow_dispatch`. Downloads and parsing run in Node.js on the Actions runner, followed by validated sequential SQL imports into remote D1. Worker Cron triggers and the scheduled handler have been removed. The following deployment variables apply only to the optional manual admin endpoint:
 
 ```json
 {
@@ -210,7 +210,7 @@ Configure a random production secret of at least 32 characters:
 wrangler secret put METADATA_UPDATE_TOKEN
 ```
 
-For local development, set the same variable in the ignored `.dev.vars` file. The admin API returns 503 if the secret is missing or its length is outside 32–512 characters. Public queries and Cron do not depend on this token. Admin endpoints support maintainer scripts/CI and trusted browser tools. They require `Authorization: Bearer <token>` even for allowed origins. Browser requests follow `ALLOWED_ORIGINS`; OPTIONS preflight permits POST with only `Authorization` and `Content-Type`, following the [Cloudflare CORS pattern](https://developers.cloudflare.com/workers/examples/cors-header-proxy/). No credentialed CORS is enabled. Operators may enter their own token manually in a trusted client; never embed it in published frontend code. Never put real tokens in source code or command history.
+For local development, set the same variable in the ignored `.dev.vars` file. The admin API returns 503 if the secret is missing or its length is outside 32–512 characters. Public queries and the Actions D1 upload do not depend on this token. Admin endpoints support maintainer scripts/CI and trusted browser tools. They require `Authorization: Bearer <token>` even for allowed origins. Browser requests follow `ALLOWED_ORIGINS`; OPTIONS preflight permits POST with only `Authorization` and `Content-Type`, following the [Cloudflare CORS pattern](https://developers.cloudflare.com/workers/examples/cors-header-proxy/). No credentialed CORS is enabled. Operators may enter their own token manually in a trusted client; never embed it in published frontend code. Never put real tokens in source code or command history.
 
 - `POST /api/v1/admin/sync`: accepts no request body and immediately runs the same built-in and additional feed synchronization. Success returns `{ "updated": 123, "sources": 9 }`. Failure returns 502 `SYNC_FAILED`; successful tasks have already committed.
 - `POST /api/v1/admin/metadata`: requires `Content-Type: application/json` and manually writes normalized public item metadata, limited to 2000 rows/1 MiB. Compressed request bodies are not accepted.
@@ -283,14 +283,15 @@ This command targets **remote `gacha_meta` by default** and passes `--yes` to Wr
 
 Each file is a separate import, so an interrupted import may leave earlier batches committed; the generated upserts can be reapplied without deleting absent items or changing personal records. Do not load synthetic test fixtures into remote D1. Public query caches may take five minutes to expire.
 
-The browser's **Update metadata** button and existing Cron still run the original Worker-side job and can still hit resource limits; this local command does not change them or deploy a Worker. GitHub Actions integration is deferred until the local workflow has been verified.
+### GitHub Actions setup
 
-Test Cron locally:
+Add the repository Actions secret `CLOUDFLARE_API_TOKEN`, scoped to the target Cloudflare account with **D1 Edit** permission. This is a Cloudflare API token, distinct from `METADATA_UPDATE_TOKEN` and `PERSONAL_SYNC_TOKEN`; never put its value in source code or logs. The checked-in account ID is the default; forks can set the Actions variable `CLOUDFLARE_ACCOUNT_ID` and must configure their own D1 binding in `wrangler.jsonc`.
 
-```sh
-wrangler dev --test-scheduled
-curl 'http://localhost:8787/cdn-cgi/local/scheduled?cron=0+3+*+*+*'
-```
+After all uploads succeed, Actions removes rows outside `en-us`, `zh-cn`, `zh-tw`, `ja-jp` from the four public metadata tables. Personal tables are excluded. Run `npm run metadata:prune` manually for the same remote cleanup (`--local` for local D1, `--dry-run` for no writes). This removes unsupported-language rows; it does not vacuum the database or guarantee an immediate reduction of allocated file size.
+
+Open **Actions → Sync public metadata → Run workflow** for the first run. Download or validation failures prevent all uploads; an upload failure stops later batches, while earlier successful batches remain committed. The workflow has read-only GitHub permissions, serializes overlapping runs, uploads public metadata only, and never accesses personal-sync records. Additional `METADATA_FEEDS` are not included in this runner workflow. Scheduled workflows run from the default branch; the daily time is 03:00 UTC and GitHub may delay execution.
+
+Redeploy the Worker once after removing its Cron configuration so the old cloud trigger is actually removed. The browser's **Update metadata** button still invokes the optional Worker-side manual endpoint and can still hit resource limits; prefer Actions or the local download/upload commands.
 
 ## Cloud deployment
 
@@ -303,7 +304,7 @@ Source code and local verification do not imply that the Worker has been deploye
 /opt/homebrew/bin/wrangler deploy
 ```
 
-The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then call the admin synchronization endpoint to populate metadata and query imported IDs. Cron or configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
+The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then run the metadata Actions workflow to populate metadata and query imported IDs. Worker configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
 
 ## Acknowledgements
 

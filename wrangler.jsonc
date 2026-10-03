@@ -17,7 +17,7 @@
     "required": ["METADATA_UPDATE_TOKEN", "PERSONAL_SYNC_TOKEN"]
   },
   "triggers": {
-    "crons": ["0 3 * * *"]
+    "crons": []
   },
   "d1_databases": [
     {

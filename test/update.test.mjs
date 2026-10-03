@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { Miniflare, convertV4MiniflareOptions, CorePaths } from 'miniflare';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 const fixture = JSON.parse(await readFile(new URL('./fixtures/metadata.json', import.meta.url), 'utf8'));
 fixture.entries = fixture.entries.filter(row => row.kind === 'item');
@@ -137,9 +137,9 @@ test('JSON expansion supports updates beyond D1 SQL parameter limits', async () 
   assert.equal((await item('hk4e', '90000199')).items.length, 1);
 });
 
-test('scheduled handler fetches configured normalized feeds with no authorization forwarding', async () => {
+test('authenticated manual sync fetches configured normalized feeds with no authorization forwarding', async () => {
   const calls = [];
-  const cron = new Miniflare(convertV4MiniflareOptions({ ...options,
+  const sync = new Miniflare(convertV4MiniflareOptions({ ...options,
     bindings: { ...options.bindings, METADATA_FEEDS: '["https://metadata.example.com/feed.json"]' },
     outboundService: async request => {
       calls.push(request.url);
@@ -148,18 +148,18 @@ test('scheduled handler fetches configured normalized feeds with no authorizatio
     },
   }));
   try {
-    await migrate(cron);
-    const response = await cron.dispatchFetch(`https://worker.test${CorePaths.SCHEDULED}?cron=0+3+*+*+*`);
+    await migrate(sync);
+    const response = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     assert.equal(response.status, 200);
     assert.deepEqual(calls, ['https://metadata.example.com/feed.json']);
-    const query = await cron.dispatchFetch('https://worker.test/api/v1/items?game=hk4e_ugc&lang=zh-cn&ids=10000003');
+    const query = await sync.dispatchFetch('https://worker.test/api/v1/items?game=hk4e_ugc&lang=zh-cn&ids=10000003');
     assert.equal((await query.json()).items[0].name, '测试衣装');
-  } finally { await cron.dispose(); }
+  } finally { await sync.dispose(); }
 });
 
-test('cron continues after a failed feed, keeps existing metadata, and signals failure', async () => {
+test('manual sync continues after a failed feed, keeps existing metadata, and signals failure', async () => {
   const calls = [];
-  const cron = new Miniflare(convertV4MiniflareOptions({ ...options,
+  const sync = new Miniflare(convertV4MiniflareOptions({ ...options,
     bindings: { ...options.bindings, METADATA_FEEDS: '["https://metadata.example.com/bad.json","https://metadata.example.com/good.json"]' },
     outboundService: async request => {
       calls.push(request.url);
@@ -167,24 +167,24 @@ test('cron continues after a failed feed, keeps existing metadata, and signals f
     },
   }));
   try {
-    await migrate(cron);
-    const response = await cron.dispatchFetch(`https://worker.test${CorePaths.SCHEDULED}?cron=0+3+*+*+*`);
-    assert.equal(response.status, 500);
+    await migrate(sync);
+    const response = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 502);
     assert.equal(calls.length, 2);
-    const query = await cron.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
+    const query = await sync.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
     assert.equal((await query.json()).items[0].name, '琴');
-  } finally { await cron.dispose(); }
+  } finally { await sync.dispose(); }
 });
 
-test('empty cron feed configuration is a no-op', async () => {
-  const response = await mf.dispatchFetch(`https://worker.test${CorePaths.SCHEDULED}`);
+test('empty manual sync feed configuration is a no-op', async () => {
+  const response = await mf.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
   assert.equal(response.status, 200);
   assert.equal((await item('hk4e', '10000003')).items[0].name, "Jean's updated name");
 });
 
-test('cron rejects redirects and invalid metadata without following or writing', async () => {
+test('manual sync rejects redirects and invalid metadata without following or writing', async () => {
   const calls = [];
-  const cron = new Miniflare(convertV4MiniflareOptions({ ...options,
+  const sync = new Miniflare(convertV4MiniflareOptions({ ...options,
     bindings: { ...options.bindings, METADATA_FEEDS: '["https://metadata.example.com/redirect","https://metadata.example.com/invalid"]' },
     outboundService: async request => {
       calls.push(request.url);
@@ -194,14 +194,14 @@ test('cron rejects redirects and invalid metadata without following or writing',
     },
   }));
   try {
-    await migrate(cron);
-    const response = await cron.dispatchFetch(`https://worker.test${CorePaths.SCHEDULED}`);
-    assert.equal(response.status, 500);
+    await migrate(sync);
+    const response = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 502);
     assert.equal(calls.length, 2);
     assert.ok(calls.every(url => url.startsWith('https://metadata.example.com/')));
-    const query = await cron.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
+    const query = await sync.dispatchFetch('https://worker.test/api/v1/items?game=hk4e&lang=zh-cn&ids=10000003');
     assert.deepEqual((await query.json()).missing_ids, ['10000003']);
-  } finally { await cron.dispose(); }
+  } finally { await sync.dispose(); }
 });
 
 test('authenticated sync fetches processed stores and special feeds into unified D1 API', async () => {

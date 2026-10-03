@@ -64,6 +64,38 @@ function json(value: unknown): Response {
   return Response.json(value, { headers: { 'Cache-Control': 'no-store' } });
 }
 
+// No module-global cache: every authenticated request checks its own D1 binding.
+async function ensurePersonalSchema(db: D1Database): Promise<void> {
+  const tables = await db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('personal_sync_state', 'personal_sync_accounts', 'personal_sync_records')").all<{ name: string }>();
+  if (tables.results.length === 3) {
+    const state = await db.prepare('SELECT singleton FROM personal_sync_state WHERE singleton = 1').first();
+    if (state) return;
+  }
+  // Concurrent first requests are safe; never replace an existing revision or record.
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS personal_sync_state (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      revision INTEGER NOT NULL CHECK (revision >= 0),
+      commit_id TEXT NOT NULL
+    )`),
+    db.prepare("INSERT OR IGNORE INTO personal_sync_state VALUES (1, 0, '')"),
+    db.prepare(`CREATE TABLE IF NOT EXISTS personal_sync_accounts (
+      game TEXT NOT NULL CHECK (game IN ('hk4e', 'hk4e_ugc', 'hkrpg', 'nap')),
+      uid TEXT NOT NULL,
+      timezone INTEGER NOT NULL CHECK (timezone BETWEEN -12 AND 14),
+      PRIMARY KEY (game, uid)
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS personal_sync_records (
+      game TEXT NOT NULL,
+      uid TEXT NOT NULL,
+      id TEXT NOT NULL,
+      record TEXT NOT NULL CHECK (json_valid(record)),
+      PRIMARY KEY (game, uid, id),
+      FOREIGN KEY (game, uid) REFERENCES personal_sync_accounts(game, uid) ON DELETE CASCADE
+    )`),
+  ]);
+}
+
 export async function personalSyncRequest(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') throw new UpdateError(405, 'METHOD_NOT_ALLOWED', 'Personal sync supports POST only.');
   const token = env.PERSONAL_SYNC_TOKEN;
@@ -81,6 +113,7 @@ export async function personalSyncRequest(request: Request, env: Env): Promise<R
   }
   const input = object(await readJson(request.body));
   const db = env.DB;
+  await ensurePersonalSchema(db);
   const stateQuery = db.prepare('SELECT revision, commit_id FROM personal_sync_state WHERE singleton = 1');
   if (input.action === 'list') {
     keys(input, ['action', 'after', 'limit']);
