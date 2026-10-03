@@ -284,8 +284,8 @@ test("hostname rules allow local ports and bounded subdomains for GET, HEAD and 
     const admin = await restricted.dispatchFetch("https://worker.test/api/v1/admin/metadata", {
       method: "POST", headers: { Origin: "http://127.0.0.1:8085" },
     });
-    assert.equal(admin.status, 403);
-    assert.equal(admin.headers.get("Access-Control-Allow-Origin"), null);
+    assert.equal(admin.status, 503);
+    assert.equal(admin.headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:8085");
   } finally {
     await restricted.dispose();
   }

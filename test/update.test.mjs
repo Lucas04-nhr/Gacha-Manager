@@ -23,22 +23,23 @@ const post = (payload, init = {}) => mf.dispatchFetch('https://worker.test/api/v
 });
 const item = async (game, id) => (await mf.dispatchFetch(`https://worker.test/api/v1/items?game=${game}&lang=zh-cn&ids=${id}`)).json();
 
-test('admin updates all four tables atomically and remains inaccessible to blog browsers', async () => {
+test('admin updates all four tables atomically and supports authenticated browser requests', async () => {
   const response = await post(fixture);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).updated, fixture.entries.length);
-  assert.equal(response.headers.get('Access-Control-Allow-Origin'), null);
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'), '*');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.equal((await item('hk4e', '10000003')).items[0].name, '琴');
   assert.equal((await item('hk4e_ugc', '10000003')).items[0].name, '测试衣装');
   assert.equal((await item('nap', '1001')).items[0].rarity, 5);
   assert.equal((await item('hkrpg', '1001')).items[0].name, '三月七');
-  assert.equal((await post(fixture, { headers: { Origin: 'https://blog.test' } })).status, 403);
-  for (const method of ['GET', 'HEAD', 'OPTIONS', 'DELETE']) {
+  assert.equal((await post(fixture, { headers: { Origin: 'https://blog.test' } })).status, 200);
+  assert.equal((await post(fixture, { headers: { Origin: 'https://blog.test', Authorization: '' } })).status, 401);
+  for (const method of ['GET', 'HEAD', 'DELETE']) {
     const blocked = await mf.dispatchFetch('https://worker.test/api/v1/admin/metadata', { method });
     assert.equal(blocked.status, 405);
-    assert.equal(blocked.headers.get('Allow'), 'POST');
-    assert.equal(blocked.headers.get('Access-Control-Allow-Origin'), null);
+    assert.equal(blocked.headers.get('Allow'), 'POST, OPTIONS');
+    assert.equal(blocked.headers.get('Access-Control-Allow-Origin'), '*');
   }
 });
 
@@ -55,6 +56,45 @@ test('authentication fails closed without token or with malformed/wrong authoriz
     assert.equal((await response.json()).error.code, 'UPDATES_DISABLED');
     assert.equal((await disabled.dispatchFetch('https://worker.test/api/v1/games')).status, 200);
   } finally { await disabled.dispose(); }
+});
+
+test('admin browser preflight and writes enforce the origin allowlist and Bearer authentication', async () => {
+  const origin = 'https://blog.test';
+  const local = new Miniflare(convertV4MiniflareOptions({ ...options, bindings: { ...options.bindings, ALLOWED_ORIGINS: origin } }));
+  try {
+    await migrate(local);
+    for (const path of ['/api/v1/admin/metadata', '/api/v1/admin/sync']) {
+      const request = init => local.dispatchFetch(`https://worker.test${path}`, init);
+      const headers = { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Authorization, Content-Type' };
+      const preflight = await request({ method: 'OPTIONS', headers });
+      assert.equal(preflight.status, 204);
+      assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), origin);
+      assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'POST, OPTIONS');
+      assert.equal(preflight.headers.get('Access-Control-Allow-Headers'), 'Authorization, Content-Type');
+      assert.equal(preflight.headers.get('Access-Control-Allow-Credentials'), null);
+      assert.equal(preflight.headers.get('Cache-Control'), 'no-store');
+      for (const changes of [{ 'Access-Control-Request-Method': 'GET' }, { 'Access-Control-Request-Headers': 'authorization, x-extra' }]) {
+        assert.equal((await request({ method: 'OPTIONS', headers: { ...headers, ...changes } })).status, 405);
+      }
+      const body = path.endsWith('/metadata') ? JSON.stringify(fixture) : undefined;
+      const init = { method: 'POST', body, headers: { Origin: origin, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } };
+      const response = await request(init);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      for (const authorization of ['', 'Bearer wrong']) {
+        const denied = await request({ ...init, headers: { ...init.headers, Authorization: authorization } });
+        assert.equal(denied.status, 401);
+        assert.equal(denied.headers.get('Access-Control-Allow-Origin'), origin);
+      }
+      for (const method of ['POST', 'OPTIONS']) {
+        const denied = await request({ ...init, body: method === 'POST' ? body : undefined, method, headers: { ...init.headers, Origin: 'https://evil.test' } });
+        assert.equal(denied.status, 403);
+        assert.equal(denied.headers.get('Access-Control-Allow-Origin'), null);
+      }
+      assert.equal((await local.dispatchFetch(`https://worker.test${path}?token=synthetic`, { method: 'OPTIONS', headers })).status, 400);
+    }
+  } finally { await local.dispose(); }
 });
 
 test('validate full payload before writes and reject user fields, wrong types and invalid JSON', async () => {

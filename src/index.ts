@@ -138,27 +138,26 @@ export default {
     const origins = env.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean);
     const wildcard = origins.includes('*');
     const personal = new URL(request.url).pathname === '/api/v1/personal/sync';
+    const admin = ['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(new URL(request.url).pathname);
+    const postEndpoint = personal || admin;
     const allowed = !origin || (!personal && wildcard) || originAllowed(origin, origins);
     let response: Response;
     try {
       if (!allowed) fail(403, 'ORIGIN_NOT_ALLOWED', 'Origin is not allowed.');
       const url = new URL(request.url);
       if (url.search.length > 4096) fail(414, 'QUERY_TOO_LONG', 'Query is too long.');
-      if (personal) {
+      if (postEndpoint) {
         query(url, []);
         if (request.method === 'OPTIONS') {
           const method = request.headers.get('Access-Control-Request-Method');
           const headers = request.headers.get('Access-Control-Request-Headers')?.split(',').map(value => value.trim().toLowerCase()) ?? [];
           if ((method && method !== 'POST') || headers.some(value => !['authorization', 'content-type'].includes(value))) {
-            fail(405, 'METHOD_NOT_ALLOWED', 'Personal sync preflight permits POST with Authorization and Content-Type only.');
+            fail(405, 'METHOD_NOT_ALLOWED', 'Preflight permits POST with Authorization and Content-Type only.');
           }
           response = new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
         } else {
-          response = await personalSyncRequest(request, env);
+          response = personal ? await personalSyncRequest(request, env) : await updateRequest(request, env);
         }
-      } else if (['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(url.pathname)) {
-        query(url, []);
-        response = await updateRequest(request, env);
       } else if (request.method === 'OPTIONS') {
         if (!paths.includes(url.pathname)) fail(404, 'NOT_FOUND', 'Endpoint not found.');
         query(url, ['/api/v1/items'].includes(url.pathname) ? ['game', 'lang', 'ids'] : []);
@@ -183,15 +182,14 @@ export default {
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Vary', 'Origin');
-    const admin = ['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(new URL(request.url).pathname);
-    if (allowed && !admin) {
+    if (allowed) {
       if (wildcard && !personal) response.headers.set('Access-Control-Allow-Origin', '*');
       else if (origin) response.headers.set('Access-Control-Allow-Origin', origin);
-      response.headers.set('Access-Control-Allow-Methods', personal ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
-      if (personal) response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      response.headers.set('Access-Control-Allow-Methods', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
+      if (postEndpoint) response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       response.headers.set('Access-Control-Max-Age', '86400');
     }
-    if (response.status === 405) response.headers.set('Allow', personal ? 'POST, OPTIONS' : admin ? 'POST' : 'GET, HEAD, OPTIONS');
+    if (response.status === 405) response.headers.set('Allow', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
     if (response.status === 401) response.headers.set('WWW-Authenticate', 'Bearer');
     return request.method === 'HEAD' ? new Response(null, response) : response;
   },

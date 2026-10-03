@@ -75,8 +75,7 @@ export async function writeMetadata(db: D1Database, input: unknown): Promise<{ u
 }
 
 export async function updateRequest(request: Request, env: Env): Promise<Response> {
-  // Admin endpoints are server/operator-only. Never distribute the token to blog clients.
-  if (request.headers.has('Origin')) throw new UpdateError(403, 'ADMIN_BROWSER_DISABLED', 'Admin endpoints do not permit browser origins.');
+  // Browser origins are checked by the router; all writes still require the operator token.
   if (request.method !== 'POST') throw new UpdateError(405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.');
   if (!env.METADATA_UPDATE_TOKEN || env.METADATA_UPDATE_TOKEN.length < 32 || env.METADATA_UPDATE_TOKEN.length > 512) {
     throw new UpdateError(503, 'UPDATES_DISABLED', 'A metadata update secret of 32–512 characters must be configured.');
