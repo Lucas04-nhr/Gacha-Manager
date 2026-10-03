@@ -217,3 +217,29 @@ test('repairing a missing records table preserves the existing revision and acco
     assert.equal((await reread.json()).revision, revision);
   } finally { await fresh.dispose(); }
 });
+
+test('repeated personal records skip data writes while preserving revision conflicts', async () => {
+  const triggers = [
+    "CREATE TABLE write_audit (kind TEXT)",
+    "CREATE TRIGGER audit_record AFTER UPDATE ON personal_sync_records BEGIN INSERT INTO write_audit VALUES ('record'); END",
+    "CREATE TRIGGER audit_account AFTER UPDATE ON personal_sync_accounts BEGIN INSERT INTO write_audit VALUES ('account'); END",
+  ];
+  for (const sql of triggers) await db.prepare(sql).run();
+  try {
+    let rev = await revision();
+    const payload = write(rev, [row('987654')], { uid: '987654321' });
+    const first = await (await post(payload)).json();
+    const repeated = await post({ ...payload, revision: first.revision });
+    assert.equal(repeated.status, 200);
+    const next = (await repeated.json()).revision;
+    assert.ok(next > first.revision);
+    assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM write_audit').first()).count, 0);
+    assert.equal((await post({ ...payload, revision: first.revision })).status, 409);
+    assert.equal((await post({ ...payload, revision: next, timezone: 1, list: [row('987654', { item_id: '10002' })] })).status, 200);
+    assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM write_audit').first()).count, 2);
+  } finally {
+    await db.prepare('DROP TRIGGER audit_record').run();
+    await db.prepare('DROP TRIGGER audit_account').run();
+    await db.prepare('DROP TABLE write_audit').run();
+  }
+});

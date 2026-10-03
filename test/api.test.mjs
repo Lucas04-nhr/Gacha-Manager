@@ -364,3 +364,17 @@ test("operator input refuses user data, numeric IDs, duplicate keys and invalid 
     metadataSql({ ...fixture, source: "https://example.com?authkey=secret" }),
   );
 });
+
+test("offline upserts skip identical content and preserve timestamps", async () => {
+  const input = { source: "https://example.com/incremental", entries: [{ game: "hk4e", kind: "item", lang: "en-us", item_id: "987654", name: "Incremental", item_type: "weapon", rank_type: "3", type: "weapon", icon: "https://example.com/icon.png" }] };
+  const run = async (payload, time) => db.prepare(metadataSql(payload, time).split("\n").find(sql => sql.startsWith("INSERT"))).run();
+  assert.equal((await run(input, "first")).meta.changes, 1);
+  const same = await run(input, "second");
+  assert.equal(same.meta.changes, 0);
+  assert.equal(same.meta.rows_written, 0);
+  const legacy = { ...input, entries: input.entries.map(({ type, icon, ...row }) => row) };
+  assert.equal((await run(legacy, "third")).meta.rows_written, 0);
+  assert.equal((await db.prepare("SELECT updated_at FROM genshin_meta WHERE entity_id = '987654'").first()).updated_at, "first");
+  const changed = { ...input, entries: [{ ...input.entries[0], name: "Corrected" }] };
+  assert.equal((await run(changed, "fourth")).meta.changes, 1);
+});

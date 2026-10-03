@@ -64,11 +64,11 @@ export async function writeMetadata(db: D1Database, input: unknown): Promise<{ u
       name=excluded.name, item_type=excluded.item_type, rank_type=excluded.rank_type,
       source=excluded.source, updated_at=excluded.updated_at,
       item_category=COALESCE(excluded.item_category, ${table}.item_category), icon=COALESCE(excluded.icon, ${table}.icon)
-    ${table === catalog.games.hk4e_ugc ? `WHERE ${table}.name IS NOT excluded.name
+    WHERE ${table}.name IS NOT excluded.name
       OR ${table}.item_type IS NOT excluded.item_type OR ${table}.rank_type IS NOT excluded.rank_type
       OR ${table}.source IS NOT excluded.source
       OR ${table}.item_category IS NOT COALESCE(excluded.item_category, ${table}.item_category)
-      OR ${table}.icon IS NOT COALESCE(excluded.icon, ${table}.icon)` : ''}
+      OR ${table}.icon IS NOT COALESCE(excluded.icon, ${table}.icon)
   `).bind(data.source, updatedAt, JSON.stringify(rows)));
   const results = await db.batch(statements);
   return { updated: results.reduce((count, result) => count + result.meta.changes, 0), updated_at: updatedAt };

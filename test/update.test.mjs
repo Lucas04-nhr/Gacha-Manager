@@ -252,11 +252,11 @@ test('authenticated sync fetches processed stores and special feeds into unified
     const before = (await query('hk4e_ugc', '260001')).items[0].updated_at;
     const repeated = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
     assert.equal(repeated.status, 200);
-    assert.equal((await repeated.json()).updated, 7);
+    assert.equal((await repeated.json()).updated, 0);
     assert.equal((await query('hk4e_ugc', '260001')).items[0].updated_at, before);
     bodies['/TextMapEN.json']['6186714091647966180'] = 'Corrected outfit';
     const corrected = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-    assert.equal((await corrected.json()).updated, 8);
+    assert.equal((await corrected.json()).updated, 1);
     assert.equal((await query('hk4e_ugc', '260001')).data['260001'].name, 'Corrected outfit');
     bodies['/TextMapEN.json'] = {};
     const missing = await sync.dispatchFetch('https://worker.test/api/v1/admin/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });

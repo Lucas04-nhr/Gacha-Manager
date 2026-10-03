@@ -171,12 +171,14 @@ export async function personalSyncRequest(request: Request, env: Env): Promise<R
     if (new Set(rowIds).size !== rowIds.length || new Set(deleteIds).size !== deleteIds.length || rowIds.some(value => deleteIds.includes(value))) invalid();
     statements.push(db.prepare(`INSERT INTO personal_sync_accounts (game, uid, timezone)
       SELECT ?, ?, ? WHERE ${guard}
-      ON CONFLICT (game, uid) DO UPDATE SET timezone = excluded.timezone`).bind(game, uid, input.timezone, commit));
+      ON CONFLICT (game, uid) DO UPDATE SET timezone = excluded.timezone
+      WHERE personal_sync_accounts.timezone IS NOT excluded.timezone`).bind(game, uid, input.timezone, commit));
     statements.push(db.prepare(`DELETE FROM personal_sync_records WHERE game = ? AND uid = ? AND id IN (SELECT value FROM json_each(?)) AND ${guard}`)
       .bind(game, uid, JSON.stringify(deleteIds), commit));
     statements.push(db.prepare(`INSERT INTO personal_sync_records (game, uid, id, record)
       SELECT ?, ?, json_extract(value, '$.key'), json_extract(value, '$.record') FROM json_each(?) WHERE ${guard}
-      ON CONFLICT (game, uid, id) DO UPDATE SET record = excluded.record`)
+      ON CONFLICT (game, uid, id) DO UPDATE SET record = excluded.record
+      WHERE personal_sync_records.record IS NOT excluded.record`)
       .bind(game, uid, JSON.stringify(rows.map((row, index) => ({ key: rowIds[index], record: JSON.stringify(row) }))), commit));
   }
   statements.push(stateQuery);
