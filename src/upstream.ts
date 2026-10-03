@@ -2,6 +2,8 @@ import catalog from './catalog.json';
 
 type Game = 'hk4e' | 'hkrpg' | 'nap';
 type Job = { game: Game | 'hk4e_ugc'; lang: string; load: () => Promise<unknown> };
+type UpstreamEntry = { game: 'nap' | 'hk4e_ugc'; lang: string; kind: 'item'; item_id: string; name: string; rank_type: string; item_type: string; type: string; icon: string };
+type ItemPayload = { source: string; entries: UpstreamEntry[] };
 type ObjectData = Record<string, unknown>;
 type Candidate = { id: string; name?: string; rank?: number; type: string; icon?: string; nameKey?: string };
 const stores = { hk4e: 'gi', hkrpg: 'hsr', nap: 'zzz' } as const;
@@ -213,7 +215,7 @@ async function supplement(game: Game, lang: string, rows: Candidate[]): Promise<
   return { rows: completed, count };
 }
 
-export function starwardItems(input: unknown, game: 'nap' | 'hk4e_ugc', lang: string): unknown {
+export function starwardItems(input: unknown, game: 'nap' | 'hk4e_ugc', lang: string): ItemPayload {
   let values: unknown;
   let source: string;
   if (game === 'nap') {
@@ -228,7 +230,7 @@ export function starwardItems(input: unknown, game: 'nap' | 'hk4e_ugc', lang: st
     source = 'https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json';
   }
   if (!Array.isArray(values) || !values.length) throw new Error('Empty Starward metadata');
-  const entries = values.flatMap(value => {
+  const entries: UpstreamEntry[] = values.flatMap((value): UpstreamEntry[] => {
     const row = object(value);
     const id = key(game === 'nap' ? row.id : row.Id);
     if (!id || !/^\d+$/.test(id)) throw new Error('Invalid Starward ID');
@@ -266,7 +268,42 @@ export function upstreamJobs(env: { UPSTREAM_SYNC_ENABLED: string; UPSTREAM_LANG
     } }));
   });
   for (const lang of selected as string[]) jobs.push({ game: 'nap', lang, load: async () => starwardItems(await download(`https://starward-static.scighost.com/metadata/v1/zzz/ZZZGachaInfo.nap_global.${lang}.json`), 'nap', lang) });
-  // The outfit feed is unlocalized Chinese. Never label it as English.
-  jobs.push({ game: 'hk4e_ugc', lang: 'zh-cn', load: async () => starwardItems(await download('https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json'), 'hk4e_ugc', 'zh-cn') });
+  // Share only within this synchronization. A failed primary never becomes a fallback-only import.
+  let outfits: Promise<ItemPayload> | undefined;
+  let costumeHashes: Promise<Map<string, string>> | undefined;
+  const loadOutfits = () => outfits ??= download('https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json')
+    .then(input => starwardItems(input, 'hk4e_ugc', 'zh-cn'));
+  jobs.push({ game: 'hk4e_ugc', lang: 'zh-cn', load: loadOutfits });
+  for (const lang of selected as string[]) {
+    if (lang === 'zh-cn') continue;
+    jobs.push({ game: 'hk4e_ugc', lang, load: async () => {
+      const primary = await loadOutfits();
+      costumeHashes ??= (async () => {
+        const values = await download(`${dimbreath.hk4e}/ExcelBinOutput/BeyondCostumeExcelConfigData.json`, 8 * 1024 * 1024);
+        if (!Array.isArray(values) || !values.length) throw new Error('Invalid outfit configuration');
+        const wanted = new Set(primary.entries.map(row => row.item_id));
+        const hashes = new Map<string, string>();
+        for (const value of values) {
+          const row = object(value);
+          const id = key(row.costumeId);
+          const hash = key(row.nameTextMapHash);
+          if (!id || !wanted.has(id) || !hash || !/^\d{1,20}$/.test(hash)) continue;
+          if (hashes.has(id) && hashes.get(id) !== hash) throw new Error('Conflicting outfit name hashes');
+          hashes.set(id, hash);
+        }
+        return hashes;
+      })();
+      const hashes = await costumeHashes;
+      const code = textCodes[languages[lang] ?? ''];
+      if (!code) throw new Error('No verified fallback locale');
+      const loc = hashes.size ? await downloadNames(`${dimbreath.hk4e}/TextMap/TextMap${code}.json`, new Set(hashes.values())) : {};
+      const entries = primary.entries.flatMap(row => {
+        const title = name(loc, hashes.get(row.item_id));
+        return title ? [{ ...row, lang, name: title }] : [];
+      });
+      console.log(JSON.stringify({ event: 'metadata_unresolved', game: 'hk4e_ugc', lang, items: primary.entries.length - entries.length }));
+      return entries.length ? { source: `${dimbreath.hk4e}/ExcelBinOutput/BeyondCostumeExcelConfigData.json`, entries } : null;
+    } });
+  }
   return jobs;
 }

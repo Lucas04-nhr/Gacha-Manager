@@ -97,3 +97,46 @@ test('primary errors do not trigger wholesale fallback and configuration is stri
     assert.throws(() => upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us","en-us"]' }));
   } finally { globalThis.fetch = original; }
 });
+
+test('UGC fallback localizes only Starward IDs and shares configuration across languages', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    calls.push(url);
+    assert.equal(init.redirect, 'manual');
+    if (url.endsWith('GenshinBeyondGachaInfo.json')) return Response.json([
+      { Id: 260001, Name: '中文衣装', Rank: 2, Icon: 'https://example.com/outfit.png' },
+      { Id: 260003, Name: '相关奖励', Rank: 0, Icon: 'https://example.com/reward.png' },
+    ]);
+    if (url.endsWith('BeyondCostumeExcelConfigData.json')) return new Response('[{"costumeId":260001,"nameTextMapHash":6186714091647966180},{"costumeId":260002,"nameTextMapHash":123}]');
+    if (url.endsWith('TextMapEN.json')) return Response.json({ '6186714091647966180': 'Outfit', 123: 'Not in primary' });
+    if (url.endsWith('TextMapJP.json')) return Response.json({ '6186714091647966180': '衣装' });
+    if (url.endsWith('TextMapCHT.json')) return Response.json({});
+    throw new Error('Unexpected request');
+  };
+  try {
+    const jobs = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["zh-cn","en-us","ja-jp","zh-tw"]' }).filter(job => job.game === 'hk4e_ugc');
+    const chinese = validateMetadata(await jobs[0].load());
+    assert.equal(chinese.entries[0].name, '中文衣装');
+    assert.equal(calls.length, 1);
+    for (const job of jobs.slice(1, 3)) {
+      const result = validateMetadata(await job.load());
+      assert.equal(result.entries.length, 1);
+      assert.equal(result.entries[0].entity_id, '260001');
+      assert.equal(result.entries[0].lang, job.lang);
+      assert.equal(result.entries[0].rank_type, '2');
+      assert.equal(result.entries[0].icon, chinese.entries[0].icon);
+      assert.ok(result.source.includes('Dimbreath'));
+    }
+    assert.equal(await jobs[3].load(), null);
+    assert.equal(calls.filter(url => url.endsWith('GenshinBeyondGachaInfo.json')).length, 1);
+    assert.equal(calls.filter(url => url.endsWith('BeyondCostumeExcelConfigData.json')).length, 1);
+    calls.length = 0;
+    globalThis.fetch = async input => { calls.push(String(input)); return new Response(null, { status: 302 }); };
+    const failed = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' }).filter(job => job.game === 'hk4e_ugc');
+    for (const job of failed) await assert.rejects(job.load());
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].includes('Dimbreath'), false);
+  } finally { globalThis.fetch = original; }
+});
