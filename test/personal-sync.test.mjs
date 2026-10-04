@@ -3,8 +3,8 @@ import { before, after, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
-const token = 'synthetic-personal-token-'.repeat(2);
-const adminToken = 'synthetic-metadata-token-'.repeat(2);
+const token = 'Synthetic-personal-token-123456789!';
+const adminToken = 'Synthetic-metadata-token-123456789!';
 let mf;
 let db;
 function instance(bindings = {}) {

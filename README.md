@@ -59,10 +59,10 @@ On your own deployment, apply all migrations and configure a separate secret wit
 ```sh
 /opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --remote
 /opt/homebrew/bin/wrangler secret put PERSONAL_SYNC_TOKEN
-/opt/homebrew/bin/wrangler deploy
+npm run deploy
 ```
 
-These commands change your remote deployment; local checks do not execute them. Choose a random secret of 32–512 non-whitespace characters. Missing or invalid secrets disable personal sync with 503, without disabling public metadata queries. For local development put a synthetic token in ignored `.dev.vars`. Token rotation changes access credentials, preserves stored records and does not create another owner. `METADATA_UPDATE_TOKEN` is separate and is only for metadata administration, including manually authenticated browser tools; never use it for personal sync.
+These commands change your remote deployment; local checks do not execute them. Choose a random secret of 32–64 printable ASCII characters, including uppercase and lowercase letters, a digit and a special character. Missing or invalid secrets disable personal sync with 503, without disabling public metadata queries. For local development put a synthetic token in ignored `.dev.vars`. Token rotation changes access credentials, preserves stored records and does not create another owner. `METADATA_UPDATE_TOKEN` is separate and is only for metadata administration, including manually authenticated browser tools; never use it for personal sync.
 
 All operations use `POST /api/v1/personal/sync`, `Authorization: Bearer <your-personal-token>` and `Content-Type: application/json`. No URL parameters, cookies, encoded bodies or credentials in URLs. Responses, including reads, use `Cache-Control: no-store`. Browser POST preflight supports only `Authorization` and `Content-Type`; configure `ALLOWED_ORIGINS` for your frontend. `*` alone does not allow browser access to personal sync. There is no token exemption for an allowed origin. Metadata administration also supports authenticated browser POST requests from allowed origins, as described below.
 
@@ -210,7 +210,7 @@ Configure a random production secret of at least 32 characters:
 wrangler secret put METADATA_UPDATE_TOKEN
 ```
 
-For local development, set the same variable in the ignored `.dev.vars` file. The admin API returns 503 if the secret is missing or its length is outside 32–512 characters. Public queries and the Actions D1 upload do not depend on this token. Admin endpoints support maintainer scripts/CI and trusted browser tools. They require `Authorization: Bearer <token>` even for allowed origins. Browser requests follow `ALLOWED_ORIGINS`; OPTIONS preflight permits POST with only `Authorization` and `Content-Type`, following the [Cloudflare CORS pattern](https://developers.cloudflare.com/workers/examples/cors-header-proxy/). No credentialed CORS is enabled. Operators may enter their own token manually in a trusted client; never embed it in published frontend code. Never put real tokens in source code or command history.
+For local development, set the same variable in the ignored `.dev.vars` file. The admin API returns 503 if the secret is missing or it fails the 32–64-character token policy. Public queries and the Actions D1 upload do not depend on this token. Admin endpoints support maintainer scripts/CI and trusted browser tools. They require `Authorization: Bearer <token>` even for allowed origins. Browser requests follow `ALLOWED_ORIGINS`; OPTIONS preflight permits POST with only `Authorization` and `Content-Type`, following the [Cloudflare CORS pattern](https://developers.cloudflare.com/workers/examples/cors-header-proxy/). No credentialed CORS is enabled. Operators may enter their own token manually in a trusted client; never embed it in published frontend code. Never put real tokens in source code or command history.
 
 - `POST /api/v1/admin/sync`: accepts no request body and immediately runs the same built-in and additional feed synchronization. Success returns `{ "updated": 123, "sources": 9 }`. Failure returns 502 `SYNC_FAILED`; successful tasks have already committed.
 - `POST /api/v1/admin/metadata`: requires `Content-Type: application/json` and manually writes normalized public item metadata, limited to 2000 rows/1 MiB. Compressed request bodies are not accepted.
@@ -301,7 +301,7 @@ Source code and local verification do not imply that the Worker has been deploye
 /opt/homebrew/bin/wrangler login
 /opt/homebrew/bin/wrangler secret put METADATA_UPDATE_TOKEN
 /opt/homebrew/bin/wrangler d1 migrations apply gacha_meta --remote
-/opt/homebrew/bin/wrangler deploy
+npm run deploy
 ```
 
 The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then run the metadata Actions workflow to populate metadata and query imported IDs. Worker configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
@@ -337,3 +337,9 @@ Daily Actions uploads, offline SQL and manual admin updates compare stored conte
 Personal writes accept incremental `list` and `delete_ids`; send only new/changed records and explicit deletions. Identical records and unchanged account timezones are skipped even if resubmitted. Each successful write request still writes one global revision row, including an otherwise unchanged request, preserving conflict detection. Reads do not write once the personal schema is initialized. Initial imports, account deletion (including cascading record deletions), migrations and other D1 databases also consume the shared account budget.
 
 The local download manifest dated 2026-10-03 contains 6,775 public metadata rows across four languages. Previously every Actions run rewrote those rows even without changes; now an unchanged run writes zero metadata rows. This snapshot is not a production usage measurement or a guarantee of future coverage. Monitor D1 Metrics → Row Metrics for actual account usage, especially on first import or large backfills.
+
+### Deployment token validation (v1.3.1)
+
+Use `npm run deploy` as the deployment command, including in Cloudflare Workers Builds. Supply both `METADATA_UPDATE_TOKEN` and `PERSONAL_SYNC_TOKEN` through build environment secrets or an ignored local `.dev.vars` file (environment values take precedence). Both must be 32–64 printable ASCII characters and contain at least one uppercase letter, lowercase letter, digit and punctuation character; spaces, control characters and non-ASCII characters are rejected. Invalid or missing values stop deployment before Wrangler runs. Never put real values in command arguments or source code.
+
+The deployment script uploads the exact validated values using Wrangler's `--secrets-file`, with a temporary owner-only file removed afterward. Existing remote secret values cannot be read back for validation. Direct `wrangler deploy` and dashboard uploads bypass this script, so configure automated deployments to use `npm run deploy`. Wrangler's `secrets.required` checks presence only; API authentication additionally rejects weak configured tokens with 503. Dry-run builds and public metadata queries do not require tokens. Existing tokens that fail the new policy must be replaced before upgrading.

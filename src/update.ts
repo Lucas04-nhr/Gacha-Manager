@@ -1,3 +1,4 @@
+import { isValidToken, tokenRequirement } from './token.mjs';
 import catalog from './catalog.json';
 import { validateMetadata } from './metadata.mjs';
 import { upstreamJobs } from './upstream';
@@ -77,11 +78,11 @@ export async function writeMetadata(db: D1Database, input: unknown): Promise<{ u
 export async function updateRequest(request: Request, env: Env): Promise<Response> {
   // Browser origins are checked by the router; all writes still require the operator token.
   if (request.method !== 'POST') throw new UpdateError(405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.');
-  if (!env.METADATA_UPDATE_TOKEN || env.METADATA_UPDATE_TOKEN.length < 32 || env.METADATA_UPDATE_TOKEN.length > 512) {
-    throw new UpdateError(503, 'UPDATES_DISABLED', 'A metadata update secret of 32–512 characters must be configured.');
+  if (!isValidToken(env.METADATA_UPDATE_TOKEN)) {
+    throw new UpdateError(503, 'UPDATES_DISABLED', `Configure METADATA_UPDATE_TOKEN with ${tokenRequirement}.`);
   }
   const authorization = request.headers.get('Authorization') ?? '';
-  const match = /^Bearer ([^\s]{1,512})$/.exec(authorization);
+  const match = /^Bearer ([^\s]{32,64})$/.exec(authorization);
   const supplied = match?.[1] ?? '';
   const encode = new TextEncoder();
   const [expectedHash, suppliedHash] = await Promise.all([

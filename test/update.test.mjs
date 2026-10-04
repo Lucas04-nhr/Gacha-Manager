@@ -6,7 +6,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 const fixture = JSON.parse(await readFile(new URL('./fixtures/metadata.json', import.meta.url), 'utf8'));
 fixture.entries = fixture.entries.filter(row => row.kind === 'item');
 const schema = (await Promise.all(['0001_metadata.sql', '0002_item_details.sql', '0003_remove_gacha_type.sql'].map(file => readFile(new URL(`../migrations/${file}`, import.meta.url), 'utf8')))).join('\n');
-const token = 'test-only-metadata-secret-not-for-production';
+const token = 'Test-only-metadata-secret-123456789!';
 const options = { unsafeTriggerHandlers: true, modules: true, scriptPath: 'dist/index.js', compatibilityDate: '2026-10-02', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'update-tests' }, bindings: { ALLOWED_ORIGINS: '*', METADATA_UPDATE_TOKEN: token, METADATA_FEEDS: '[]', UPSTREAM_SYNC_ENABLED: 'false', UPSTREAM_LANGUAGES: '[]' } };
 let mf;
 let db;
