@@ -5,7 +5,7 @@
   "account_id": "2a190a563d8c90115322b4931de73d5c",
   "compatibility_date": "2026-10-02",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
+  "workers_dev": false,
   "routes": [{ "pattern": "helios.lucas04.top", "custom_domain": true }],
   "vars": {
     "ALLOWED_ORIGINS": "*.lucas04.top, 127.0.0.1, localhost",
