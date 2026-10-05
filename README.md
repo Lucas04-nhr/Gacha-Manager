@@ -66,12 +66,12 @@ These commands change your remote deployment; local checks do not execute them. 
 
 All operations use `POST /api/v1/personal/sync`, `Authorization: Bearer <your-personal-token>` and `Content-Type: application/json`. No URL parameters, cookies, encoded bodies or credentials in URLs. Responses, including reads, use `Cache-Control: no-store`. Browser POST preflight supports only `Authorization` and `Content-Type`; configure `ALLOWED_ORIGINS` for your frontend. `*` alone does not allow browser access to personal sync. There is no token exemption for an allowed origin. Metadata administration also supports authenticated browser POST requests from allowed origins, as described below.
 
-| Action | JSON body fields | Response |
-| --- | --- | --- |
-| `list` | `action`, optional `limit`, `after` | `{ revision, accounts: [{ game, uid, timezone }], next }` |
-| `read` | `action`, `game`, `uid`, optional `limit`, `after` | `{ revision, account: { game, uid, timezone } or null, list: [...], next }` |
-| `write` | `action`, `game`, `uid`, `timezone`, `revision`, `list`, optional `delete_ids` | `{ revision }` |
-| `delete_account` | `action`, `game`, `uid`, `revision` | `{ revision }` |
+| Action           | JSON body fields                                                               | Response                                                                    |
+| ---------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `list`           | `action`, optional `limit`, `after`                                            | `{ revision, accounts: [{ game, uid, timezone }], next }`                   |
+| `read`           | `action`, `game`, `uid`, optional `limit`, `after`                             | `{ revision, account: { game, uid, timezone } or null, list: [...], next }` |
+| `write`          | `action`, `game`, `uid`, `timezone`, `revision`, `list`, optional `delete_ids` | `{ revision }`                                                              |
+| `delete_account` | `action`, `game`, `uid`, `revision`                                            | `{ revision }`                                                              |
 
 `game` is `hk4e`, `hk4e_ugc`, `hkrpg` or `nap`; namespaces are isolated even for the same UID/record ID. UID and all IDs must be decimal **strings**, at most 20 digits. UID, record ID and item ID are normalized with `BigInt` (leading zeros are removed); other raw fields are retained as strings. `timezone` is an integer from -12 to 14. Record fields are allowlisted: required `id`, `item_id`, `time`; optional decimal strings `gacha_type`, `uigf_gacha_type`, `gacha_id`, `count`, `rank_type`, `schedule_id`, `op_gacha_type`. Time must be a valid `YYYY-MM-DD HH:mm:ss` server-local timestamp. Non-UGC records require `gacha_type`; GI additionally requires matching `uigf_gacha_type` (400 maps to 301), HSR requires `gacha_id`, and UGC requires `schedule_id`, `op_gacha_type`, `rank_type`. Provided raw ranks must be GI/HSR 3/4/5, ZZZ 2/3/4, UGC 0–5. Sync stores raw ranks without display conversion, as informed by the [UIGF standard](https://uigf.org/en/standards/uigf.html).
 
@@ -90,14 +90,16 @@ Example first write after reading `{ "revision": 0, "accounts": [], "next": null
   "uid": "123456789",
   "timezone": 8,
   "revision": 0,
-  "list": [{
-    "id": "9007199254740993",
-    "item_id": "10000003",
-    "time": "2026-10-03 12:00:00",
-    "gacha_type": "301",
-    "uigf_gacha_type": "301",
-    "rank_type": "5"
-  }],
+  "list": [
+    {
+      "id": "9007199254740993",
+      "item_id": "10000003",
+      "time": "2026-10-03 12:00:00",
+      "gacha_type": "301",
+      "uigf_gacha_type": "301",
+      "rank_type": "5"
+    }
+  ],
   "delete_ids": []
 }
 ```
@@ -304,7 +306,7 @@ Source code and local verification do not imply that the Worker has been deploye
 npm run deploy
 ```
 
-The public API is available at https://gachameta.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then run the metadata Actions workflow to populate metadata and query imported IDs. Worker configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
+The public API is available at https://helios.lucas04.top/. Documentation is hosted at https://blog.lucas04.top/docs/gacha-manager/backend/. After deployment, check `/api/v1/health`, then run the metadata Actions workflow to populate metadata and query imported IDs. Worker configuration changes require redeployment. Deployment credentials and admin tokens must not be committed to Git.
 
 ## Acknowledgements
 
@@ -326,7 +328,7 @@ The runtime data sources are listed separately from projects consulted for inspi
 
 ## License
 
-The Gacha Metadata API is licensed under the [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html). The public data sources are subject to their own licenses and terms of use, which may differ from this repository's license. Using the public data sources might require additional attribution or compliance with their respective licenses. 
+The Gacha Metadata API is licensed under the [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html). The public data sources are subject to their own licenses and terms of use, which may differ from this repository's license. Using the public data sources might require additional attribution or compliance with their respective licenses.
 
 ## D1 Free write budget
 

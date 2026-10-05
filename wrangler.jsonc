@@ -6,26 +6,26 @@
   "compatibility_date": "2026-10-02",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
-  "routes": [{ "pattern": "gachameta.lucas04.top", "custom_domain": true }],
+  "routes": [{ "pattern": "helios.lucas04.top", "custom_domain": true }],
   "vars": {
     "ALLOWED_ORIGINS": "*.lucas04.top, 127.0.0.1, localhost",
     "METADATA_FEEDS": "[]",
     "UPSTREAM_SYNC_ENABLED": "true",
-    "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]"
+    "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]",
   },
   "secrets": {
-    "required": ["METADATA_UPDATE_TOKEN", "PERSONAL_SYNC_TOKEN"]
+    "required": ["METADATA_UPDATE_TOKEN", "PERSONAL_SYNC_TOKEN"],
   },
   "triggers": {
-    "crons": []
+    "crons": [],
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "gacha_meta",
       "database_id": "2ad55df3-3dbb-404b-9eae-a2543ea4dfe7",
-      "migrations_dir": "migrations"
-    }
+      "migrations_dir": "migrations",
+    },
   ],
   "observability": {
     "enabled": true,
@@ -35,15 +35,15 @@
       "enabled": true,
       "head_sampling_rate": 0.1,
       "invocation_logs": true,
-      "persist": true
+      "persist": true,
     },
     "traces": {
       "enabled": false,
       "head_sampling_rate": 0.1,
-      "persist": true
+      "persist": true,
     },
     "issues": {
-      "enabled": true
-    }
-  }
+      "enabled": true,
+    },
+  },
 }
