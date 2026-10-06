@@ -341,3 +341,25 @@ test('configuration diagnostics identify only fixed reasons, preserve health and
     } finally { await mf.dispose(); }
   }
 });
+
+
+test('client context diagnostics are fixed identifiers and reject before Siteverify', async () => {
+  const { mf, post, calls } = await setup({ TURNSTILE_HOSTNAMES: 'blog.test' });
+  try {
+    const cases = [
+      [{ Origin: '' }, ['ORIGIN_MISSING']],
+      [{ Origin: 'https://other.test' }, ['ORIGIN_HOSTNAME_NOT_ALLOWED']],
+      [{ 'CF-Connecting-IP': 'invalid' }, ['CLIENT_IP_INVALID']],
+    ];
+    for (const [headers, reasons] of cases) {
+      const response = await post('session', { turnstileToken: 'valid' }, headers);
+      assert.equal(response.status, 403, await response.clone().text());
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      const body = await response.json();
+      assert.equal(body.error.code, 'SYNC_SESSION_INVALID');
+      assert.deepEqual(body.error.reasons, reasons);
+      for (const value of [bearer, signing, ip]) assert.ok(!JSON.stringify(body).includes(value));
+    }
+    assert.equal(calls(), 0);
+  } finally { await mf.dispose(); }
+});

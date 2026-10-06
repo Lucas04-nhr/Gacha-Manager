@@ -20,6 +20,14 @@ export class TurnstileConfigError extends UpdateError {
   }
 }
 
+type ClientContextReason = 'ORIGIN_MISSING' | 'ORIGIN_INVALID' | 'ORIGIN_HOSTNAME_NOT_ALLOWED'
+  | 'CLIENT_IP_MISSING' | 'CLIENT_IP_INVALID';
+export class ClientContextError extends UpdateError {
+  constructor(code: string, public readonly reasons: readonly ClientContextReason[]) {
+    super(403, code, 'A trusted frontend Origin and client context are required.');
+  }
+}
+
 export function turnstileConfig(env: Env) {
   if (!env.TURNSTILE_ENABLED || String(env.TURNSTILE_ENABLED) === 'false') return null;
   const reasons: TurnstileConfigReason[] = [];
@@ -53,9 +61,18 @@ async function bearer(request: Request, env: Env): Promise<string> {
 function context(request: Request, hosts: string[], code = 'SYNC_SESSION_INVALID'): { origin: string; ip: string } {
   const origin = request.headers.get('Origin') ?? '';
   const ip = request.headers.get('CF-Connecting-IP') ?? '';
-  let hostname = '';
-  try { hostname = new URL(origin).hostname; } catch { /* reject below */ }
-  if (!hosts.includes(hostname) || !ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip)) reject(403, code, 'A trusted frontend Origin and client context are required.');
+  const reasons: ClientContextReason[] = [];
+  if (!origin) reasons.push('ORIGIN_MISSING');
+  else {
+    try {
+      const parsed = new URL(origin);
+      if (!['https:', 'http:'].includes(parsed.protocol) || parsed.origin !== origin) reasons.push('ORIGIN_INVALID');
+      else if (!hosts.includes(parsed.hostname)) reasons.push('ORIGIN_HOSTNAME_NOT_ALLOWED');
+    } catch { reasons.push('ORIGIN_INVALID'); }
+  }
+  if (!ip) reasons.push('CLIENT_IP_MISSING');
+  else if (ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip)) reasons.push('CLIENT_IP_INVALID');
+  if (reasons.length) throw new ClientContextError(code, reasons);
   return { origin, ip };
 }
 // Atomic primary-D1 counters, shared by every isolate/location; no per-isolate limiter.

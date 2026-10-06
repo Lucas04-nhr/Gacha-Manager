@@ -400,6 +400,10 @@ The runtime data sources are listed separately from projects consulted for inspi
 
 The Gacha Metadata API is licensed under the [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html). The public data sources are subject to their own licenses and terms of use, which may differ from this repository's license. Using the public data sources might require additional attribution or compliance with their respective licenses.
 
+## Remote development
+
+`npm run dev` uses local development; `npm run dev:remote` runs a temporary preview on Cloudflare with production resources (`wrangler dev --remote`). On macOS both invoke `/opt/homebrew/bin/wrangler` explicitly. Remote preview is not a production deployment: secrets supplied to preview through ignored local env files must not be mistaken for the live Worker's unreadable stored secrets. Keep request logging sanitized and never print credentials. Prefer health and OPTIONS probes; real personal writes affect remote D1 and require deliberate authorization. Stop the development process after debugging.
+
 ## D1 Free write budget
 
 D1 Free allows 100,000 rows written per account per day, resetting at 00:00 UTC. INSERT, UPDATE, DELETE and index maintenance count toward this budget; batch size and HTTP request counts are not write-row counts. See [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/).
@@ -417,3 +421,6 @@ Use `npm run deploy` as the deployment command, including in Cloudflare Workers 
 Turnstile secrets previously uploaded with Wrangler remain server-side; this script supplies only the two validated bearer secrets and does not read back or replace `TURNSTILE_SECRET`/`SYNC_SESSION_SECRET`. Configure those separately on each enabled deployment; when Turnstile is disabled they are unnecessary.
 
 The deployment script uploads the exact validated values using Wrangler's `--secrets-file`, with a temporary owner-only file removed afterward. Existing remote secret values cannot be read back for validation. Direct `wrangler deploy` and dashboard uploads bypass this script, so configure automated deployments to use `npm run deploy`. Wrangler's `secrets.required` checks presence only; API authentication additionally rejects weak configured tokens with 503. Dry-run builds and public metadata queries do not require tokens. Existing tokens that fail the new policy must be replaced before upgrading.
+
+
+Client context failures retain `SYNC_SESSION_INVALID` (or `TURNSTILE_FAILED` for anonymous verification) and include fixed `reasons`: `ORIGIN_MISSING`, `ORIGIN_INVALID`, `ORIGIN_HOSTNAME_NOT_ALLOWED`, `CLIENT_IP_MISSING`, or `CLIENT_IP_INVALID`. They never return the request Origin or IP. The browser sends its Origin automatically; do not add `CF-Connecting-IP` in frontend code. Cloudflare must provide this trusted header at the Worker ingress. If `CLIENT_IP_MISSING` occurs, inspect Cloudflare Managed Transforms (especially Remove visitor IP headers) and any Worker/proxy routing. Do not substitute caller-controlled forwarding headers or disable session IP binding.

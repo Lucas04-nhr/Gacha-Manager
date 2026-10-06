@@ -2,7 +2,7 @@ import { apiPage } from './page';
 import catalog from './catalog.json';
 import { updateRequest, UpdateError } from './update';
 import { personalSyncRequest } from './personal-sync';
-import { sessionRequest, connectionVerifyRequest, TurnstileConfigError } from './sync-session';
+import { sessionRequest, connectionVerifyRequest, TurnstileConfigError, ClientContextError } from './sync-session';
 
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
@@ -179,7 +179,7 @@ export default {
       }
     } catch (error) {
       if (error instanceof HttpError || error instanceof UpdateError) {
-        response = json({ error: { code: error.code, message: error.message, ...(error instanceof TurnstileConfigError ? { reasons: error.reasons } : {}) } }, error.status);
+        response = json({ error: { code: error.code, message: error.message, ...(error instanceof TurnstileConfigError || error instanceof ClientContextError ? { reasons: error.reasons } : {}) } }, error.status);
       } else {
         // Do not log URLs, SQL parameters, headers or request bodies.
         console.error(JSON.stringify({ event: connection ? 'connection_verification_failed' : personal ? 'personal_sync_failed' : 'metadata_query_failed' }));
