@@ -62,19 +62,26 @@ function signed(extra = {}, secret = signing) {
   return payload + '.' + createHmac('sha256', secret).update(payload).digest('hex');
 }
 
-test('health advertises public configuration; incomplete/invalid enabled settings fail closed', async () => {
-  for (const [bindings, status] of [[{}, 200], [{ TURNSTILE_ENABLED: 'false' }, 200], [{ TURNSTILE_SECRET: '' }, 503], [{ SYNC_SESSION_SECRET: '' }, 503], [{ TURNSTILE_HOSTNAMES: '' }, 503], [{ TURNSTILE_SITE_KEY: '' }, 503], [{ TURNSTILE_ENABLED: 'typo' }, 503]]) {
-    const { mf } = await setup(bindings);
+test('health is independent of private Turnstile readiness without advertising a disabled bypass', async () => {
+  for (const bindings of [{}, { TURNSTILE_ENABLED: 'false' }, { TURNSTILE_SECRET: '' }, { SYNC_SESSION_SECRET: '' }, { TURNSTILE_HOSTNAMES: '' }, { TURNSTILE_SITE_KEY: '' }, { TURNSTILE_ENABLED: 'typo' }]) {
+    const { mf, post } = await setup(bindings);
     try {
-      const response = await mf.dispatchFetch('https://worker.test/api/v1/health');
-      assert.equal(response.status, status, await response.clone().text());
-      assert.equal(response.headers.get('Cache-Control'), 'no-store');
-      const body = await response.json();
-      if (status === 200) {
+      for (const headers of [{}, { Origin: origin }]) {
+        const response = await mf.dispatchFetch('https://worker.test/api/v1/health', { headers });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('Cache-Control'), 'no-store');
+        const body = await response.json();
         assert.equal(body.status, 'ok'); assert.equal(body.database, 'gacha_meta');
-        assert.deepEqual(body.turnstile, bindings.TURNSTILE_ENABLED === 'false' ? { enabled: false } : { enabled: true, siteKey: 'synthetic-public-sitekey' });
-      } else assert.equal(body.error.code, 'TURNSTILE_UNAVAILABLE');
-      assert.ok(!JSON.stringify(body).includes('synthetic-turnstile-secret'));
+        assert.deepEqual(body.turnstile, bindings.TURNSTILE_ENABLED === 'false' ? { enabled: false }
+          : bindings.TURNSTILE_SITE_KEY === '' ? { enabled: true } : { enabled: true, siteKey: 'synthetic-public-sitekey' });
+        assert.ok(!JSON.stringify(body).includes('synthetic-turnstile-secret'));
+      }
+      if (Object.keys(bindings).length && bindings.TURNSTILE_ENABLED !== 'false') {
+        await code(await post('session', { turnstileToken: 'not-redeemed' }), 'TURNSTILE_UNAVAILABLE', 503);
+        await code(await post('sync', { action: 'list' }), 'TURNSTILE_UNAVAILABLE', 503);
+        const anonymous = await mf.dispatchFetch('https://worker.test/api/v1/connection/verify', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ turnstileToken: 'not-redeemed' }) });
+        await code(anonymous, 'TURNSTILE_UNAVAILABLE', 503);
+      }
     } finally { await mf.dispose(); }
   }
 });

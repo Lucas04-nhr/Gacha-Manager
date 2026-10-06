@@ -2,7 +2,7 @@ import { apiPage } from './page';
 import catalog from './catalog.json';
 import { updateRequest, UpdateError } from './update';
 import { personalSyncRequest } from './personal-sync';
-import { sessionRequest, turnstileConfig, connectionVerifyRequest } from './sync-session';
+import { sessionRequest, connectionVerifyRequest } from './sync-session';
 
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
@@ -76,8 +76,11 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
     for (const table of new Set(Object.values(catalog.games))) {
       await env.DB.prepare(`SELECT entity_id FROM ${table} LIMIT 1`).all();
     }
-    const config = turnstileConfig(env);
-    return json({ status: 'ok', database: 'gacha_meta', turnstile: config ? { enabled: true, siteKey: config.siteKey } : { enabled: false } });
+    // Discovery is public and independent of private protection readiness.
+    // Never advertise disabled mode when enabled configuration is incomplete.
+    const enabled = !!env.TURNSTILE_ENABLED && String(env.TURNSTILE_ENABLED) !== 'false';
+    const siteKey = /^[!-~]{1,256}$/.test(env.TURNSTILE_SITE_KEY ?? '') ? env.TURNSTILE_SITE_KEY : undefined;
+    return json({ status: 'ok', database: 'gacha_meta', turnstile: enabled ? { enabled: true, siteKey } : { enabled: false } });
   }
   if (path === '/api/v1/games') {
     query(url, []);
