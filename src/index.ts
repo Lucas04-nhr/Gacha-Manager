@@ -2,7 +2,7 @@ import { apiPage } from './page';
 import catalog from './catalog.json';
 import { updateRequest, UpdateError } from './update';
 import { personalSyncRequest } from './personal-sync';
-import { sessionRequest, turnstileConfig } from './sync-session';
+import { sessionRequest, turnstileConfig, connectionVerifyRequest } from './sync-session';
 
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
@@ -139,11 +139,12 @@ export default {
     const origin = request.headers.get('Origin');
     const origins = env.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean);
     const wildcard = origins.includes('*');
+    const connection = new URL(request.url).pathname === '/api/v1/connection/verify';
     const session = new URL(request.url).pathname === '/api/v1/personal/session';
     const personal = session || new URL(request.url).pathname === '/api/v1/personal/sync';
     const admin = ['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(new URL(request.url).pathname);
-    const postEndpoint = personal || admin;
-    const allowed = !origin || (!personal && wildcard) || originAllowed(origin, origins);
+    const postEndpoint = personal || admin || connection;
+    const allowed = connection ? !!origin && originAllowed(origin, origins) : !origin || (!personal && wildcard) || originAllowed(origin, origins);
     let response: Response;
     try {
       if (!allowed) fail(403, 'ORIGIN_NOT_ALLOWED', 'Origin is not allowed.');
@@ -154,12 +155,12 @@ export default {
         if (request.method === 'OPTIONS') {
           const method = request.headers.get('Access-Control-Request-Method');
           const headers = request.headers.get('Access-Control-Request-Headers')?.split(',').map(value => value.trim().toLowerCase()) ?? [];
-          if ((method && method !== 'POST') || headers.some(value => !(personal ? ['authorization', 'content-type', 'x-gacha-sync-session'] : ['authorization', 'content-type']).includes(value))) {
-            fail(405, 'METHOD_NOT_ALLOWED', personal ? 'Preflight permits POST with Authorization, Content-Type and X-Gacha-Sync-Session only.' : 'Preflight permits POST with Authorization and Content-Type only.');
+          if ((method && method !== 'POST') || headers.some(value => !(connection ? ['content-type'] : personal ? ['authorization', 'content-type', 'x-gacha-sync-session'] : ['authorization', 'content-type']).includes(value))) {
+            fail(405, 'METHOD_NOT_ALLOWED', connection ? 'Preflight permits POST with Content-Type only.' : personal ? 'Preflight permits POST with Authorization, Content-Type and X-Gacha-Sync-Session only.' : 'Preflight permits POST with Authorization and Content-Type only.');
           }
           response = new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
         } else {
-          response = session ? await sessionRequest(request, env) : personal ? await personalSyncRequest(request, env) : await updateRequest(request, env);
+          response = connection ? await connectionVerifyRequest(request, env) : session ? await sessionRequest(request, env) : personal ? await personalSyncRequest(request, env) : await updateRequest(request, env);
         }
       } else if (request.method === 'OPTIONS') {
         if (!paths.includes(url.pathname)) fail(404, 'NOT_FOUND', 'Endpoint not found.');
@@ -178,18 +179,18 @@ export default {
         response = json({ error: { code: error.code, message: error.message } }, error.status);
       } else {
         // Do not log URLs, SQL parameters, headers or request bodies.
-        console.error(JSON.stringify({ event: personal ? 'personal_sync_failed' : 'metadata_query_failed' }));
-        response = json({ error: { code: 'DATABASE_UNAVAILABLE', message: personal ? 'Personal sync database is unavailable.' : 'Metadata database is unavailable.' } }, 503);
+        console.error(JSON.stringify({ event: connection ? 'connection_verification_failed' : personal ? 'personal_sync_failed' : 'metadata_query_failed' }));
+        response = json({ error: { code: connection ? 'TURNSTILE_UNAVAILABLE' : 'DATABASE_UNAVAILABLE', message: connection ? 'Connection verification is unavailable.' : personal ? 'Personal sync database is unavailable.' : 'Metadata database is unavailable.' } }, 503);
       }
     }
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Vary', 'Origin');
     if (allowed) {
-      if (wildcard && !personal) response.headers.set('Access-Control-Allow-Origin', '*');
+      if (wildcard && !personal && !connection) response.headers.set('Access-Control-Allow-Origin', '*');
       else if (origin) response.headers.set('Access-Control-Allow-Origin', origin);
       response.headers.set('Access-Control-Allow-Methods', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
-      if (postEndpoint) response.headers.set('Access-Control-Allow-Headers', personal ? 'Authorization, Content-Type, X-Gacha-Sync-Session' : 'Authorization, Content-Type');
+      if (postEndpoint) response.headers.set('Access-Control-Allow-Headers', connection ? 'Content-Type' : personal ? 'Authorization, Content-Type, X-Gacha-Sync-Session' : 'Authorization, Content-Type');
       response.headers.set('Access-Control-Max-Age', '86400');
     }
     if (response.status === 405) response.headers.set('Allow', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');

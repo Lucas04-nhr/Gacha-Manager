@@ -24,15 +24,16 @@ async function setup(bindings = {}) {
       const body = await request.json();
       assert.equal(body.secret, 'synthetic-turnstile-secret');
       assert.equal(body.remoteip, ip);
-      if (body.response === 'timeout') await new Promise(resolve => setTimeout(resolve, 5500));
-      if (body.response === 'unavailable') return new Response('unavailable', { status: 503 });
-      if (body.response === 'redirect') return new Response(null, { status: 302, headers: { Location: 'https://evil.test/' } });
-      if (body.response === 'internal') return Response.json({ success: false, 'error-codes': ['internal-error'] });
-      if (body.response === 'malformed') return new Response('not json');
-      const success = !used.has(body.response) && body.response !== 'failed';
+      const scenario = body.response.replace(/^connection-/, '');
+      if (scenario === 'timeout') await new Promise(resolve => setTimeout(resolve, 5500));
+      if (scenario === 'unavailable') return new Response('unavailable', { status: 503 });
+      if (scenario === 'redirect') return new Response(null, { status: 302, headers: { Location: 'https://evil.test/' } });
+      if (scenario === 'internal') return Response.json({ success: false, 'error-codes': ['internal-error'] });
+      if (scenario === 'malformed') return new Response('not json');
+      const success = !used.has(body.response) && scenario !== 'failed';
       used.add(body.response);
-      return Response.json({ success, hostname: body.response === 'hostname' ? 'evil.test' : 'blog.test',
-        action: body.response === 'action' ? 'other' : 'personal_sync' });
+      return Response.json({ success, hostname: scenario === 'hostname' ? 'evil.test' : 'blog.test',
+        action: scenario === 'action' ? 'other' : body.response.startsWith('connection-') ? 'connection_settings' : 'personal_sync' });
     },
   }));
   try {
@@ -188,6 +189,112 @@ test('session and sync bodies remain bounded; malformed and encoded challenge bo
     const malformed = await mf.dispatchFetch('https://worker.test/api/v1/personal/session', { method: 'POST', headers: { Origin: origin, 'CF-Connecting-IP': ip, 'Content-Type': 'application/json' }, body: '{' });
     await code(malformed, 'INVALID_JSON', 400);
     await code(await post('sync', { action: 'list', extra: 'x'.repeat(1024 * 1024) }, { 'X-Gacha-Sync-Session': signed() }), 'PAYLOAD_TOO_LARGE', 413);
+    assert.equal(calls(), 0);
+  } finally { await mf.dispose(); }
+});
+
+function anonymous(mf, body, headers = {}) {
+  return mf.dispatchFetch('https://worker.test/api/v1/connection/verify', {
+    method: 'POST', headers: { Origin: origin, 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+  });
+}
+
+test('anonymous connection check needs no bearer and grants no identity/session or personal data access', async () => {
+  const { mf, db, post } = await setup({ PERSONAL_SYNC_TOKEN: '' });
+  try {
+    // Even absent personal tables must not be read, written or reconstructed by this check.
+    for (const table of ['personal_sync_records', 'personal_sync_accounts', 'personal_sync_state']) await db.prepare(`DROP TABLE ${table}`).run();
+    const response = await anonymous(mf, { turnstileToken: 'connection-ok' });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(response.headers.get('Set-Cookie'), null);
+    assert.deepEqual(await response.json(), { verified: true });
+    assert.deepEqual((await db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'personal_sync_%'").all()).results, []);
+    await code(await post('sync', { action: 'list' }), 'PERSONAL_SYNC_DISABLED', 503);
+  } finally { await mf.dispose(); }
+});
+
+test('connection tokens are bounded, single-use and action/hostname specific; cannot authorize any personal action', async () => {
+  const { mf, post, db } = await setup();
+  try {
+    for (const [body, expected, status] of [[{}, 'TURNSTILE_REQUIRED', 400], [{ turnstileToken: '' }, 'TURNSTILE_REQUIRED', 400], [{ turnstileToken: 'x'.repeat(2049) }, 'TURNSTILE_REQUIRED', 400], [{ turnstileToken: 'x'.repeat(9000) }, 'PAYLOAD_TOO_LARGE', 413], [{ turnstileToken: 'connection-ok', extra: {} }, 'TURNSTILE_REQUIRED', 400], ...['failed', 'hostname', 'action'].map(value => [{ turnstileToken: 'connection-' + value }, 'TURNSTILE_FAILED', 403]), [{ turnstileToken: 'personal-for-anonymous' }, 'TURNSTILE_FAILED', 403]]) {
+      await code(await anonymous(mf, body), expected, status);
+    }
+    await db.prepare('DELETE FROM sync_security_limits').run();
+    assert.equal((await anonymous(mf, { turnstileToken: 'connection-replay' })).status, 200);
+    await code(await anonymous(mf, { turnstileToken: 'connection-replay' }), 'TURNSTILE_FAILED', 403);
+    await code(await post('session', { turnstileToken: 'connection-replay' }), 'TURNSTILE_FAILED', 403);
+    await code(await post('session', { turnstileToken: 'connection-fresh-for-session' }), 'TURNSTILE_FAILED', 403);
+    for (const action of ['list', 'read', 'write', 'delete_account']) {
+      await code(await post('sync', { action }), 'TURNSTILE_REQUIRED', 403);
+      await code(await post('sync', { action }, { 'X-Gacha-Sync-Session': '{"verified":true}' }), 'SYNC_SESSION_INVALID', 401);
+    }
+  } finally { await mf.dispose(); }
+});
+
+test('anonymous Origin/CORS/context checks reject third-party consumption before Siteverify', async () => {
+  const { mf, calls, db } = await setup();
+  try {
+    const response = await mf.dispatchFetch('https://worker.test/api/v1/connection/verify', { method: 'OPTIONS', headers: {
+      Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type',
+    } });
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(response.headers.get('Access-Control-Allow-Headers'), 'Content-Type');
+    assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'POST, OPTIONS');
+    assert.equal(response.headers.get('Access-Control-Allow-Credentials'), null);
+    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM sync_security_limits').first()).n, 0);
+    for (const headers of [{ Origin: '' }, { Origin: 'https://evil.test' }]) {
+      const denied = await anonymous(mf, { turnstileToken: 'connection-not-consumed' }, headers);
+      assert.equal(denied.status, 403);
+      assert.equal((await denied.json()).error.code, 'ORIGIN_NOT_ALLOWED');
+      assert.equal(denied.headers.get('Access-Control-Allow-Origin'), null);
+    }
+    await code(await anonymous(mf, { turnstileToken: 'connection-no-ip' }, { 'CF-Connecting-IP': 'invalid' }), 'TURNSTILE_FAILED', 403);
+    await code(await anonymous(mf, { turnstileToken: 'connection-cookie' }, { Cookie: 'synthetic=cookie' }), 'TURNSTILE_REQUIRED', 400);
+    // Allowed Origin, but verifier returns another allowed hostname: exact match still required.
+    const mismatch = await anonymous(mf, { turnstileToken: 'connection-host-match' }, { Origin: 'https://other.test' });
+    assert.equal(mismatch.status, 403); assert.equal((await mismatch.json()).error.code, 'TURNSTILE_FAILED');
+    const deniedPreflight = await mf.dispatchFetch('https://worker.test/api/v1/connection/verify', { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Authorization' } });
+    await code(deniedPreflight, 'METHOD_NOT_ALLOWED', 405);
+    assert.equal(calls(), 1);
+  } finally { await mf.dispose(); }
+  const wildcard = await setup({ ALLOWED_ORIGINS: '*' });
+  try {
+    assert.equal((await anonymous(wildcard.mf, { turnstileToken: 'connection-no-wildcard' })).status, 403);
+    assert.equal(wildcard.calls(), 0);
+  } finally { await wildcard.mf.dispose(); }
+});
+
+test('anonymous verification fails closed on disabled/incomplete configuration, unavailable counters and Siteverify faults', async () => {
+  for (const bindings of [{ TURNSTILE_ENABLED: 'false' }, { TURNSTILE_SECRET: '' }, { TURNSTILE_HOSTNAMES: '' }, { TURNSTILE_SITE_KEY: '' }, { SYNC_SESSION_SECRET: '' }]) {
+    const { mf, calls } = await setup(bindings);
+    try {
+      await code(await anonymous(mf, { turnstileToken: 'connection-config' }), 'TURNSTILE_UNAVAILABLE', 503);
+      assert.equal(calls(), 0);
+    } finally { await mf.dispose(); }
+  }
+  const { mf, db } = await setup();
+  try {
+    for (const value of ['unavailable', 'malformed', 'redirect', 'internal', 'timeout']) await code(await anonymous(mf, { turnstileToken: 'connection-' + value }), 'TURNSTILE_UNAVAILABLE', 503);
+    await db.prepare('DROP TABLE sync_security_limits').run();
+    await code(await anonymous(mf, { turnstileToken: 'connection-no-counter' }), 'TURNSTILE_UNAVAILABLE', 503);
+  } finally { await mf.dispose(); }
+});
+
+test('anonymous and personal session issuance share atomic per-IP and global rate budgets', async () => {
+  const { mf, db, post, calls } = await setup();
+  try {
+    await db.prepare('INSERT INTO sync_security_limits VALUES (?, ?, ?)').bind(hash('entry:' + ip), Math.floor(Date.now() / 60000), 9).run();
+    const responses = await Promise.all([anonymous(mf, {}), post('session', {}), anonymous(mf, {})]);
+    assert.deepEqual(responses.map(response => response.status).sort(), [400, 429, 429]);
+    for (const response of responses.filter(response => response.status === 429)) {
+      assert.equal(response.headers.get('Retry-After'), '60'); await code(response, 'RATE_LIMITED', 429);
+    }
+    await db.prepare('DELETE FROM sync_security_limits').run();
+    await db.prepare('INSERT INTO sync_security_limits VALUES (?, ?, ?)').bind(hash('entry:global'), Math.floor(Date.now() / 60000), 120).run();
+    await code(await anonymous(mf, { turnstileToken: 'connection-global-block' }), 'RATE_LIMITED', 429);
     assert.equal(calls(), 0);
   } finally { await mf.dispose(); }
 });

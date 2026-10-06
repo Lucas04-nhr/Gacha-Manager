@@ -31,12 +31,12 @@ async function bearer(request: Request, env: Env): Promise<string> {
   if (!hashes[0] || !hashes[1] || !crypto.subtle.timingSafeEqual(hashes[0], hashes[1])) reject(401, 'UNAUTHORIZED', 'A valid personal sync Bearer token is required.');
   return digest(env.PERSONAL_SYNC_TOKEN);
 }
-function context(request: Request, hosts: string[]): { origin: string; ip: string } {
+function context(request: Request, hosts: string[], code = 'SYNC_SESSION_INVALID'): { origin: string; ip: string } {
   const origin = request.headers.get('Origin') ?? '';
   const ip = request.headers.get('CF-Connecting-IP') ?? '';
   let hostname = '';
   try { hostname = new URL(origin).hostname; } catch { /* reject below */ }
-  if (!hosts.includes(hostname) || !ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip)) reject(403, 'SYNC_SESSION_INVALID', 'A trusted frontend Origin and client context are required.');
+  if (!hosts.includes(hostname) || !ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip)) reject(403, code, 'A trusted frontend Origin and client context are required.');
   return { origin, ip };
 }
 // Atomic primary-D1 counters, shared by every isolate/location; no per-isolate limiter.
@@ -60,14 +60,7 @@ async function signingKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 interface Claims { scope: string; identity: string; origin: string; client: string; issued: number; expires: number; nonce: string }
-export async function sessionRequest(request: Request, env: Env): Promise<Response> {
-  if (request.method !== 'POST') reject(405, 'METHOD_NOT_ALLOWED', 'Session issuance supports POST only.');
-  const config = turnstileConfig(env);
-  if (!config) reject(503, 'PERSONAL_SYNC_DISABLED', 'Turnstile sessions are disabled.');
-  // Count all attempts before comparing bearer, including absent/incorrect credentials.
-  await rate(env, 'entry:' + (request.headers.get('CF-Connecting-IP') ?? 'missing'), 10);
-  await rate(env, 'entry:global', 120);
-  const client = context(request, config.hosts);
+async function verifyChallenge(request: Request, config: NonNullable<ReturnType<typeof turnstileConfig>>, client: { origin: string; ip: string }, action: 'personal_sync' | 'connection_settings'): Promise<void> {
   if (request.headers.has('Content-Encoding') || request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') reject(400, 'TURNSTILE_REQUIRED', 'Send unencoded application/json with turnstileToken.');
   const input = await readJson(request.body, 8192);
   if (!input || typeof input !== 'object' || Array.isArray(input)) reject(400, 'TURNSTILE_REQUIRED', 'A Turnstile token is required.');
@@ -89,7 +82,18 @@ export async function sessionRequest(request: Request, env: Env): Promise<Respon
   if (!verification || typeof verification !== 'object' || Array.isArray(verification)) reject(503, 'TURNSTILE_UNAVAILABLE', 'Turnstile verification is unavailable.');
   const result = verification as Record<string, unknown>;
   if (result.success !== true && Array.isArray(result['error-codes']) && result['error-codes'].some(code => ['internal-error', 'invalid-input-secret', 'missing-input-secret'].includes(String(code)))) reject(503, 'TURNSTILE_UNAVAILABLE', 'Turnstile verification is unavailable.');
-  if (result.success !== true || result.action !== 'personal_sync' || result.hostname !== new URL(client.origin).hostname || !config.hosts.includes(String(result.hostname))) reject(403, 'TURNSTILE_FAILED', 'Turnstile verification failed.');
+  if (result.success !== true || result.action !== action || result.hostname !== new URL(client.origin).hostname || !config.hosts.includes(String(result.hostname))) reject(403, 'TURNSTILE_FAILED', 'Turnstile verification failed.');
+}
+
+export async function sessionRequest(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') reject(405, 'METHOD_NOT_ALLOWED', 'Session issuance supports POST only.');
+  const config = turnstileConfig(env);
+  if (!config) reject(503, 'PERSONAL_SYNC_DISABLED', 'Turnstile sessions are disabled.');
+  // Count all attempts before comparing bearer, including absent/incorrect credentials.
+  await rate(env, 'entry:' + (request.headers.get('CF-Connecting-IP') ?? 'missing'), 10);
+  await rate(env, 'entry:global', 120);
+  const client = context(request, config.hosts);
+  await verifyChallenge(request, config, client, 'personal_sync');
   // Challenge redemption precedes bearer comparison; no bearer oracle without a challenge.
   const identity = await bearer(request, env);
   const issued = Date.now();
@@ -98,6 +102,20 @@ export async function sessionRequest(request: Request, env: Env): Promise<Respon
   const signature = hex(new Uint8Array(await crypto.subtle.sign('HMAC', await signingKey(config.signing), encoder.encode(payload))));
   return Response.json({ sessionToken: `${payload}.${signature}`, expiresAt: claims.expires }, { headers: { 'Cache-Control': 'no-store' } });
 }
+// An anonymous check is only a Save settings result, never a personal API credential.
+export async function connectionVerifyRequest(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') reject(405, 'METHOD_NOT_ALLOWED', 'Connection verification supports POST only.');
+  const config = turnstileConfig(env);
+  if (!config) reject(503, 'TURNSTILE_UNAVAILABLE', 'Turnstile connection verification is disabled.');
+  const client = context(request, config.hosts, 'TURNSTILE_FAILED');
+  if (request.headers.has('Cookie')) reject(400, 'TURNSTILE_REQUIRED', 'Send connection verification without cookies.');
+  // Share the issuance budget so switching endpoints cannot multiply Siteverify calls.
+  await rate(env, 'entry:' + client.ip, 10);
+  await rate(env, 'entry:global', 120);
+  await verifyChallenge(request, config, client, 'connection_settings');
+  return Response.json({ verified: true }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
 export async function protectPersonalSync(request: Request, env: Env): Promise<void> {
   const config = turnstileConfig(env);
   if (!config) { await bearer(request, env); return; }
