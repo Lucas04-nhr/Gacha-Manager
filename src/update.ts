@@ -10,7 +10,7 @@ export class UpdateError extends Error {
 const maxBytes = 1024 * 1024;
 const maxEntries = 2000;
 
-export async function readJson(body: ReadableStream<Uint8Array> | null): Promise<unknown> {
+export async function readJson(body: ReadableStream<Uint8Array> | null, limit = maxBytes): Promise<unknown> {
   if (!body) throw new UpdateError(400, 'INVALID_JSON', 'JSON body is required.');
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -20,7 +20,7 @@ export async function readJson(body: ReadableStream<Uint8Array> | null): Promise
       const result = await reader.read();
       if (result.done) break;
       bytes += result.value.byteLength;
-      if (bytes > maxBytes) throw new UpdateError(413, 'PAYLOAD_TOO_LARGE', 'JSON payload exceeds 1 MiB.');
+      if (bytes > limit) throw new UpdateError(413, 'PAYLOAD_TOO_LARGE', limit === maxBytes ? 'JSON payload exceeds 1 MiB.' : 'JSON payload exceeds the endpoint limit.');
       chunks.push(result.value);
     }
   } finally {

@@ -9,6 +9,11 @@
   "routes": [{ "pattern": "helios.lucas04.top", "custom_domain": true }],
   "vars": {
     "ALLOWED_ORIGINS": "*.lucas04.top, 127.0.0.1, localhost",
+    // Personal-sync protection; set false for bearer-only operation.
+    // Apply migration 0005 before deploying this enabled configuration.
+    "TURNSTILE_ENABLED": "true",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFPry3zoiqY_NbXk",
+    "TURNSTILE_HOSTNAMES": "blog.lucas04.top",
     "METADATA_FEEDS": "[]",
     "UPSTREAM_SYNC_ENABLED": "true",
     "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]",

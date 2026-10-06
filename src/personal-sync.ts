@@ -1,4 +1,4 @@
-import { isValidToken, tokenRequirement } from './token.mjs';
+import { protectPersonalSync } from './sync-session';
 import catalog from './catalog.json';
 import { readJson, UpdateError } from './update';
 
@@ -99,16 +99,7 @@ async function ensurePersonalSchema(db: D1Database): Promise<void> {
 
 export async function personalSyncRequest(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') throw new UpdateError(405, 'METHOD_NOT_ALLOWED', 'Personal sync supports POST only.');
-  const token = env.PERSONAL_SYNC_TOKEN;
-  if (!isValidToken(token)) {
-    throw new UpdateError(503, 'PERSONAL_SYNC_DISABLED', `Configure PERSONAL_SYNC_TOKEN with ${tokenRequirement}.`);
-  }
-  const supplied = /^Bearer ([^\s]{32,64})$/.exec(request.headers.get('Authorization') ?? '')?.[1] ?? '';
-  const encoder = new TextEncoder();
-  const hashes = await Promise.all([token, supplied].map(value => crypto.subtle.digest('SHA-256', encoder.encode(value))));
-  if (!hashes[0] || !hashes[1] || !crypto.subtle.timingSafeEqual(hashes[0], hashes[1])) {
-    throw new UpdateError(401, 'UNAUTHORIZED', 'A valid personal sync Bearer token is required.');
-  }
+  await protectPersonalSync(request, env);
   if (request.headers.has('Content-Encoding') || request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
     throw new UpdateError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Send unencoded application/json.');
   }

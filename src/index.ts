@@ -2,6 +2,7 @@ import { apiPage } from './page';
 import catalog from './catalog.json';
 import { updateRequest, UpdateError } from './update';
 import { personalSyncRequest } from './personal-sync';
+import { sessionRequest, turnstileConfig } from './sync-session';
 
 const games = Object.keys(catalog.games);
 const languages = catalog.languages;
@@ -75,7 +76,8 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
     for (const table of new Set(Object.values(catalog.games))) {
       await env.DB.prepare(`SELECT entity_id FROM ${table} LIMIT 1`).all();
     }
-    return json({ status: 'ok', database: 'gacha_meta' });
+    const config = turnstileConfig(env);
+    return json({ status: 'ok', database: 'gacha_meta', turnstile: config ? { enabled: true, siteKey: config.siteKey } : { enabled: false } });
   }
   if (path === '/api/v1/games') {
     query(url, []);
@@ -137,7 +139,8 @@ export default {
     const origin = request.headers.get('Origin');
     const origins = env.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean);
     const wildcard = origins.includes('*');
-    const personal = new URL(request.url).pathname === '/api/v1/personal/sync';
+    const session = new URL(request.url).pathname === '/api/v1/personal/session';
+    const personal = session || new URL(request.url).pathname === '/api/v1/personal/sync';
     const admin = ['/api/v1/admin/metadata', '/api/v1/admin/sync'].includes(new URL(request.url).pathname);
     const postEndpoint = personal || admin;
     const allowed = !origin || (!personal && wildcard) || originAllowed(origin, origins);
@@ -151,12 +154,12 @@ export default {
         if (request.method === 'OPTIONS') {
           const method = request.headers.get('Access-Control-Request-Method');
           const headers = request.headers.get('Access-Control-Request-Headers')?.split(',').map(value => value.trim().toLowerCase()) ?? [];
-          if ((method && method !== 'POST') || headers.some(value => !['authorization', 'content-type'].includes(value))) {
-            fail(405, 'METHOD_NOT_ALLOWED', 'Preflight permits POST with Authorization and Content-Type only.');
+          if ((method && method !== 'POST') || headers.some(value => !(personal ? ['authorization', 'content-type', 'x-gacha-sync-session'] : ['authorization', 'content-type']).includes(value))) {
+            fail(405, 'METHOD_NOT_ALLOWED', personal ? 'Preflight permits POST with Authorization, Content-Type and X-Gacha-Sync-Session only.' : 'Preflight permits POST with Authorization and Content-Type only.');
           }
           response = new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
         } else {
-          response = personal ? await personalSyncRequest(request, env) : await updateRequest(request, env);
+          response = session ? await sessionRequest(request, env) : personal ? await personalSyncRequest(request, env) : await updateRequest(request, env);
         }
       } else if (request.method === 'OPTIONS') {
         if (!paths.includes(url.pathname)) fail(404, 'NOT_FOUND', 'Endpoint not found.');
@@ -186,10 +189,11 @@ export default {
       if (wildcard && !personal) response.headers.set('Access-Control-Allow-Origin', '*');
       else if (origin) response.headers.set('Access-Control-Allow-Origin', origin);
       response.headers.set('Access-Control-Allow-Methods', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
-      if (postEndpoint) response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      if (postEndpoint) response.headers.set('Access-Control-Allow-Headers', personal ? 'Authorization, Content-Type, X-Gacha-Sync-Session' : 'Authorization, Content-Type');
       response.headers.set('Access-Control-Max-Age', '86400');
     }
     if (response.status === 405) response.headers.set('Allow', postEndpoint ? 'POST, OPTIONS' : 'GET, HEAD, OPTIONS');
+    if (response.status === 429) response.headers.set('Retry-After', '60');
     if (response.status === 401) response.headers.set('WWW-Authenticate', 'Bearer');
     return request.method === 'HEAD' ? new Response(null, response) : response;
   },

@@ -8,13 +8,18 @@
   "workers_dev": true,
   "routes": [{ "pattern": "YOUR_CUSTOM_DOMAIN", "custom_domain": true }],
   "vars": {
-    "ALLOWED_ORIGINS": "*",
+    "ALLOWED_ORIGINS": "https://frontend.example.com, 127.0.0.1, localhost",
+    // Optional: leave false for bearer-only personal sync (no Turnstile secrets needed).
+    // To enable, configure your public sitekey, exact frontend hostnames and both secrets.
+    "TURNSTILE_ENABLED": "false",
+    "TURNSTILE_SITE_KEY": "",
+    "TURNSTILE_HOSTNAMES": "",
     "METADATA_FEEDS": "[]",
     "UPSTREAM_SYNC_ENABLED": "true",
     "UPSTREAM_LANGUAGES": "[\"en-us\",\"zh-cn\",\"zh-tw\",\"ja-jp\"]"
   },
   "secrets": {
-    "required": ["METADATA_UPDATE_TOKEN", "UPSTREAM_SYNC_TOKEN"]
+    "required": ["METADATA_UPDATE_TOKEN", "PERSONAL_SYNC_TOKEN"]
   },
   "triggers": {
     "crons": []
@@ -23,7 +28,7 @@
     {
       "binding": "DB",
       "database_name": "gacha_meta",
-      "database_id": "2ad55df3-3dbb-404b-9eae-a2543ea4dfe7",
+      "database_id": "YOUR_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ],
