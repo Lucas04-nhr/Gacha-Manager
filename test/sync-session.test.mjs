@@ -305,3 +305,39 @@ test('anonymous and personal session issuance share atomic per-IP and global rat
     assert.equal(calls(), 0);
   } finally { await mf.dispose(); }
 });
+
+test('configuration diagnostics identify only fixed reasons, preserve health and reject before Siteverify/data writes', async () => {
+  const cases = [
+    [{ TURNSTILE_ENABLED: 'TRUE' }, ['TURNSTILE_ENABLED_INVALID']],
+    [{ TURNSTILE_SITE_KEY: '' }, ['TURNSTILE_SITE_KEY_MISSING']],
+    [{ TURNSTILE_SITE_KEY: 'private-invalid-site key' }, ['TURNSTILE_SITE_KEY_FORMAT']],
+    [{ TURNSTILE_SECRET: '' }, ['TURNSTILE_SECRET_MISSING']],
+    [{ TURNSTILE_SECRET: 'private-invalid-secret ' }, ['TURNSTILE_SECRET_FORMAT']],
+    [{ TURNSTILE_SECRET: 'x'.repeat(257) }, ['TURNSTILE_SECRET_FORMAT']],
+    [{ SYNC_SESSION_SECRET: '' }, ['SYNC_SESSION_SECRET_MISSING']],
+    ...['Aa1!' + 'x'.repeat(27), 'Aa1!' + 'x'.repeat(61), 'aa1!' + 'x'.repeat(28), 'AA1!' + 'X'.repeat(28), 'Aaa!' + 'x'.repeat(28), 'Aa12' + 'x'.repeat(28), signing + ' ', signing + '\n', signing + 'é'].map(value => [{ SYNC_SESSION_SECRET: value }, ['SYNC_SESSION_SECRET_FORMAT']]),
+    [{ SYNC_SESSION_SECRET: bearer }, ['SYNC_SESSION_SECRET_EQUALS_PERSONAL_SYNC_TOKEN']],
+    [{ TURNSTILE_SECRET: signing }, ['SYNC_SESSION_SECRET_EQUALS_TURNSTILE_SECRET']],
+    [{ TURNSTILE_HOSTNAMES: '' }, ['TURNSTILE_HOSTNAMES_MISSING']],
+    ...['https://blog.test', 'blog.test/path', '*.test', 'Blog.test', 'blog.test,', ',blog.test', 'blog.test,,other.test', 'blog..test', '-blog.test', 'blog-.test', 'a'.repeat(64) + '.test'].map(value => [{ TURNSTILE_HOSTNAMES: value }, ['TURNSTILE_HOSTNAMES_INVALID']]),
+    [{ TURNSTILE_SECRET: '', SYNC_SESSION_SECRET: '', TURNSTILE_HOSTNAMES: 'https://bad.test' }, ['TURNSTILE_SECRET_MISSING', 'SYNC_SESSION_SECRET_MISSING', 'TURNSTILE_HOSTNAMES_INVALID']],
+  ];
+  for (const [bindings, reasons] of cases) {
+    const { mf, post, db, calls } = await setup(bindings);
+    try {
+      const before = await db.prepare('SELECT * FROM personal_sync_state').all();
+      for (const response of [await post('session', { turnstileToken: 'synthetic-challenge-not-redeemed' }), await post('sync', { action: 'list' }), await anonymous(mf, { turnstileToken: 'connection-not-redeemed' })]) {
+        assert.equal(response.status, 503);
+        assert.equal(response.headers.get('Cache-Control'), 'no-store');
+        assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+        const body = await response.json();
+        assert.deepEqual(body, { error: { code: 'TURNSTILE_UNAVAILABLE', message: 'Turnstile configuration is unavailable.', reasons } });
+        for (const value of [bearer, signing, 'synthetic-turnstile-secret', 'synthetic-challenge-not-redeemed']) assert.ok(!JSON.stringify(body).includes(value));
+      }
+      assert.equal((await mf.dispatchFetch('https://worker.test/api/v1/health')).status, 200);
+      assert.equal(calls(), 0);
+      assert.deepEqual((await db.prepare('SELECT * FROM personal_sync_state').all()).results, before.results);
+      assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM sync_security_limits').first()).n, 0);
+    } finally { await mf.dispose(); }
+  }
+});

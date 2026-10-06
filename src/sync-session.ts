@@ -9,16 +9,35 @@ const encoder = new TextEncoder();
 function reject(status: number, code: string, message: string): never {
   throw new UpdateError(status, code, message);
 }
+type TurnstileConfigReason = 'TURNSTILE_ENABLED_INVALID' | 'TURNSTILE_SITE_KEY_MISSING' | 'TURNSTILE_SITE_KEY_FORMAT'
+  | 'TURNSTILE_SECRET_MISSING' | 'TURNSTILE_SECRET_FORMAT' | 'SYNC_SESSION_SECRET_MISSING' | 'SYNC_SESSION_SECRET_FORMAT'
+  | 'SYNC_SESSION_SECRET_EQUALS_PERSONAL_SYNC_TOKEN' | 'SYNC_SESSION_SECRET_EQUALS_TURNSTILE_SECRET'
+  | 'TURNSTILE_HOSTNAMES_MISSING' | 'TURNSTILE_HOSTNAMES_INVALID';
+
+export class TurnstileConfigError extends UpdateError {
+  constructor(public readonly reasons: readonly TurnstileConfigReason[]) {
+    super(503, 'TURNSTILE_UNAVAILABLE', 'Turnstile configuration is unavailable.');
+  }
+}
+
 export function turnstileConfig(env: Env) {
   if (!env.TURNSTILE_ENABLED || String(env.TURNSTILE_ENABLED) === 'false') return null;
+  const reasons: TurnstileConfigReason[] = [];
   const hosts = (env.TURNSTILE_HOSTNAMES ?? '').split(',').map(host => host.trim());
-  if (String(env.TURNSTILE_ENABLED) !== 'true' || !/^[!-~]{1,256}$/.test(env.TURNSTILE_SITE_KEY)
-    || !env.TURNSTILE_SECRET || !/^[!-~]{1,256}$/.test(env.TURNSTILE_SECRET)
-    || !isValidToken(env.SYNC_SESSION_SECRET) || (env.SYNC_SESSION_SECRET === env.PERSONAL_SYNC_TOKEN || env.SYNC_SESSION_SECRET === env.TURNSTILE_SECRET)
-    || hosts.some(host => !/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(host))) {
-    reject(503, 'TURNSTILE_UNAVAILABLE', 'Turnstile configuration is unavailable.');
-  }
-  return { siteKey: env.TURNSTILE_SITE_KEY, hosts, secret: env.TURNSTILE_SECRET, signing: env.SYNC_SESSION_SECRET };
+  if (String(env.TURNSTILE_ENABLED) !== 'true') reasons.push('TURNSTILE_ENABLED_INVALID');
+  if (!env.TURNSTILE_SITE_KEY) reasons.push('TURNSTILE_SITE_KEY_MISSING');
+  else if (!/^[!-~]{1,256}$/.test(env.TURNSTILE_SITE_KEY)) reasons.push('TURNSTILE_SITE_KEY_FORMAT');
+  if (!env.TURNSTILE_SECRET) reasons.push('TURNSTILE_SECRET_MISSING');
+  else if (!/^[!-~]{1,256}$/.test(env.TURNSTILE_SECRET)) reasons.push('TURNSTILE_SECRET_FORMAT');
+  if (!env.SYNC_SESSION_SECRET) reasons.push('SYNC_SESSION_SECRET_MISSING');
+  else if (!isValidToken(env.SYNC_SESSION_SECRET)) reasons.push('SYNC_SESSION_SECRET_FORMAT');
+  if (env.SYNC_SESSION_SECRET && env.SYNC_SESSION_SECRET === env.PERSONAL_SYNC_TOKEN) reasons.push('SYNC_SESSION_SECRET_EQUALS_PERSONAL_SYNC_TOKEN');
+  if (env.SYNC_SESSION_SECRET && env.SYNC_SESSION_SECRET === env.TURNSTILE_SECRET) reasons.push('SYNC_SESSION_SECRET_EQUALS_TURNSTILE_SECRET');
+  if (!env.TURNSTILE_HOSTNAMES) reasons.push('TURNSTILE_HOSTNAMES_MISSING');
+  else if (hosts.some(host => host.length > 253 || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(host))) reasons.push('TURNSTILE_HOSTNAMES_INVALID');
+  if (reasons.length) throw new TurnstileConfigError(reasons);
+  // Missing secrets already throw above; defaults only narrow the optional binding types.
+  return { siteKey: env.TURNSTILE_SITE_KEY, hosts, secret: env.TURNSTILE_SECRET ?? '', signing: env.SYNC_SESSION_SECRET ?? '' };
 }
 async function digest(value: string): Promise<string> {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value))));
