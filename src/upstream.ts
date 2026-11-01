@@ -87,20 +87,20 @@ async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectDa
     }
     if (input.trim()) lastCharacter = input.trimEnd().slice(-1);
     buffer += input;
-    for (const hash of remaining) {
-      const quotedKey = JSON.stringify(hash);
-      const offset = buffer.indexOf(quotedKey);
-      if (offset < 0) continue;
-      const match = /^\s*:\s*("(?:\\.|[^"\\])*")/.exec(buffer.slice(offset + quotedKey.length));
-      if (!match) continue; // Key/value may span network chunks.
-      const value: unknown = JSON.parse(match[1] ?? 'null');
+    // Visit each complete entry once: searching for every remaining hash per
+    // chunk costs seconds of CPU on real maps and can exhaust the fetch timeout.
+    let consumed = 0;
+    for (const match of buffer.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"\s*:\s*("[^"\\]*(?:\\.[^"\\]*)*")/g)) {
+      consumed = match.index + match[0].length;
+      const hash = match[1] ?? '';
+      if (!remaining.delete(hash)) continue;
+      const value: unknown = JSON.parse(match[2] ?? 'null');
       if (typeof value !== 'string') throw new Error('Invalid localization value');
       result[hash] = value;
-      remaining.delete(hash);
     }
-    // Public item names are limited to 256 characters. This overlap is enough
-    // for escaped names and keys while keeping CPU and memory bounded.
-    buffer = buffer.slice(-8192);
+    // Keep only the incomplete entry; it may span network chunks.
+    buffer = buffer.slice(consumed);
+    if (buffer.length > 1024 * 1024) throw new Error('Localization entry too large');
   }
   try {
     while (true) {

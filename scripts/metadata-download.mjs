@@ -68,10 +68,10 @@ export async function downloadMetadata({ output, languages = catalog.languages, 
         task.rows = payload.entries.length;
         task.status = 'success';
         console.log(`Validated ${task.rows} rows in ${batches.length} batches.`);
-      } catch {
-        // Do not print raw URLs, downloaded payloads or transport exceptions.
+      } catch (error) {
+        // Do not print raw URLs, downloaded payloads or transport exceptions; the error class is safe.
         task.reason = 'Source download, parsing, validation or output failed; no database was modified.';
-        console.error(`Failed: ${job.game} / ${job.lang} (source ${index + 1}).`);
+        console.error(`Failed: ${job.game} / ${job.lang} (source ${index + 1}): ${error instanceof Error ? error.name : 'UnknownError'}.`);
       }
     }
     manifest.complete = manifest.tasks.length > 0 && manifest.tasks.every(task => task.status !== 'failed');

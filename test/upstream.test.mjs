@@ -150,6 +150,53 @@ test('UGC fallback localizes only Starward IDs and shares configuration across l
   } finally { globalThis.fetch = original; }
 });
 
+async function localizeOutfits(textMap, chunkSize) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = String(input);
+    if (url.endsWith('GenshinBeyondGachaInfo.json')) return Response.json([
+      { Id: 260001, Name: '衣装一', Rank: 2, Icon: 'https://example.com/1.png' },
+      { Id: 260002, Name: '衣装二', Rank: 2, Icon: 'https://example.com/2.png' },
+    ]);
+    if (url.endsWith('BeyondCostumeExcelConfigData.json')) return Response.json([{ costumeId: 260001, nameTextMapHash: 111 }, { costumeId: 260002, nameTextMapHash: 222 }]);
+    if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return Response.json([{ FHIDKAKGMFN: 275016, nameTextMapHash: 333 }]);
+    if (url.endsWith('TextMapEN.json')) {
+      const bytes = new TextEncoder().encode(textMap);
+      let offset = 0;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (offset >= bytes.length) { controller.close(); return; }
+        controller.enqueue(bytes.subarray(offset, offset + chunkSize)); offset += chunkSize;
+      } }));
+    }
+    throw new Error('Unexpected request');
+  };
+  try {
+    const job = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' })
+      .find(job => job.game === 'hk4e_ugc' && job.lang === 'en-us');
+    return await job.load();
+  } finally { globalThis.fetch = original; }
+}
+
+test('localization streaming resolves entries across chunks and ignores key-like values', async () => {
+  const textMap = JSON.stringify({
+    unused: 'quote" and slash\\',
+    999: '"222":"Forged inside a value"',
+    long: 'x'.repeat(20000),
+    111: 'Outfit "绫华" \\ one',
+    222: '第二件\n衣装',
+  });
+  for (const chunkSize of [1, 2, 7, 4096, textMap.length * 4]) {
+    const result = await localizeOutfits(textMap, chunkSize);
+    assert.deepEqual(result.entries.map(row => row.name), ['Outfit "绫华" \\ one', '第二件\n衣装']);
+  }
+});
+
+test('localization streaming rejects truncated maps and oversized entries', async () => {
+  await assert.rejects(localizeOutfits('{"111":"Outfit","222":"Unfinished', 5), /Truncated localization map/);
+  await assert.rejects(localizeOutfits('["111"]', 5), /Invalid localization map/);
+  await assert.rejects(localizeOutfits(`{"long":"${'x'.repeat(2 * 1024 * 1024)}","111":"Outfit"}`, 64 * 1024), /Localization entry too large/);
+});
+
 test('UGC drawing schema changes fail explicitly instead of silently dropping translations', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async input => {
