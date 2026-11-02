@@ -144,7 +144,7 @@ test('UGC fallback localizes only Starward IDs and shares configuration across l
     calls.length = 0;
     globalThis.fetch = async input => { calls.push(String(input)); return new Response(null, { status: 302 }); };
     const failed = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' }).filter(job => job.game === 'hk4e_ugc');
-    for (const job of failed) await assert.rejects(job.load());
+    for (const job of failed) await assert.rejects(job.load(), /HTTP 302 for GenshinBeyondGachaInfo\.json/);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].includes('Dimbreath'), false);
   } finally { globalThis.fetch = original; }
@@ -157,6 +157,7 @@ async function localizeOutfits(textMap, chunkSize) {
     if (url.endsWith('GenshinBeyondGachaInfo.json')) return Response.json([
       { Id: 260001, Name: '衣装一', Rank: 2, Icon: 'https://example.com/1.png' },
       { Id: 260002, Name: '衣装二', Rank: 2, Icon: 'https://example.com/2.png' },
+      { Id: 275016, Name: '未翻译形录', Rank: 4, Icon: 'https://example.com/3.png' },
     ]);
     if (url.endsWith('BeyondCostumeExcelConfigData.json')) return Response.json([{ costumeId: 260001, nameTextMapHash: 111 }, { costumeId: 260002, nameTextMapHash: 222 }]);
     if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return Response.json([{ FHIDKAKGMFN: 275016, nameTextMapHash: 333 }]);
@@ -197,7 +198,7 @@ test('localization streaming rejects truncated maps and oversized entries', asyn
   await assert.rejects(localizeOutfits(`{"long":"${'x'.repeat(2 * 1024 * 1024)}","111":"Outfit"}`, 64 * 1024), /Localization entry too large/);
 });
 
-test('UGC drawing schema changes fail explicitly instead of silently dropping translations', async () => {
+async function localizeDrawings(drawings) {
   const original = globalThis.fetch;
   globalThis.fetch = async input => {
     const url = String(input);
@@ -205,12 +206,39 @@ test('UGC drawing schema changes fail explicitly instead of silently dropping tr
       { Id: 275016, Name: '测试形录', Rank: 4, Icon: 'https://example.com/catalog.png' },
     ]);
     if (url.endsWith('BeyondCostumeExcelConfigData.json')) return Response.json([{ costumeId: 260001, nameTextMapHash: 123 }]);
-    if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return Response.json([{ changedField: 275016, nameTextMapHash: 3481381737 }]);
+    if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return new Response(drawings);
+    if (url.endsWith('TextMapEN.json')) return Response.json({ 3481381737: 'Synthetic catalog' });
     throw new Error('Unexpected request');
   };
   try {
     const job = upstreamJobs({ UPSTREAM_SYNC_ENABLED: 'true', UPSTREAM_LANGUAGES: '["en-us"]' })
       .find(job => job.game === 'hk4e_ugc' && job.lang === 'en-us');
-    await assert.rejects(job.load(), /Unrecognized outfit ID field/);
+    return await job.load();
   } finally { globalThis.fetch = original; }
+}
+
+test('UGC drawing ID field is identified by shape across renamed obfuscated schemas', async () => {
+  for (const field of ['FHIDKAKGMFN', 'LHDNMFFMIJH']) {
+    const result = await localizeDrawings(`[
+      {"descTextMapHash":1,"iconHash":3806693058812336600,"nameTextMapHash":3481381737,"${field}":275016,"LFACFJCJKOM":"250013,3","BHFEOEAIMLO":"Green","BPGKHMDIMIH":[260001]},
+      {"descTextMapHash":2,"iconHash":3806693058812336601,"nameTextMapHash":123,"${field}":275017,"LFACFJCJKOM":"250013,3","BHFEOEAIMLO":"Green","BPGKHMDIMIH":[260002]}
+    ]`);
+    assert.deepEqual(result.entries.map(row => [row.item_id, row.name]), [['275016', 'Synthetic catalog']]);
+  }
+});
+
+test('UGC drawing schema changes fail explicitly instead of silently dropping translations', async () => {
+  const rejected = [
+    // No ID column at all.
+    [{ nameTextMapHash: 3481381737, label: 'Green' }],
+    // Unique integers that match no primary item are not item IDs.
+    [{ unrelated: 1, nameTextMapHash: 3481381737 }],
+    // Two columns could be the ID; picking one risks assigning wrong names.
+    [{ first: 275016, second: 275016, nameTextMapHash: 3481381737 }],
+    // Duplicated values cannot identify rows.
+    [{ repeated: 275016, nameTextMapHash: 3481381737 }, { repeated: 275016, nameTextMapHash: 123 }],
+    // The ID column must be present on every row.
+    [{ partial: 275016, nameTextMapHash: 3481381737 }, { nameTextMapHash: 123 }],
+  ];
+  for (const drawings of rejected) await assert.rejects(localizeDrawings(JSON.stringify(drawings)), /Unrecognized outfit ID field/);
 });

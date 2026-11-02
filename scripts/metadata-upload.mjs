@@ -6,15 +6,21 @@ import { spawnSync } from 'node:child_process';
 import { validateMetadata } from '../src/metadata.mjs';
 import { metadataSql } from './metadata-sql.mjs';
 
-export async function prepareUpload(input) {
+export async function prepareUpload(input, { allowPartial = false } = {}) {
   const directory = resolve(input);
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'));
-  if (manifest.complete !== true || !Array.isArray(manifest.tasks) || !manifest.tasks.length
+  const partial = allowPartial && manifest.complete === false;
+  if ((manifest.complete !== true && !partial) || !Array.isArray(manifest.tasks) || !manifest.tasks.length
     || typeof manifest.createdAt !== 'string' || !Number.isFinite(Date.parse(manifest.createdAt)))
     throw new Error('A complete download manifest with a valid creation time is required.');
   const batches = [];
   const seen = new Set();
   for (const task of manifest.tasks) {
+    if (partial && task.status === 'failed') {
+      // Upserts never delete, so a failed source simply keeps its existing rows.
+      console.warn(`Skipping failed source: ${task.game} / ${task.language}.`);
+      continue;
+    }
     if (!['success', 'skipped'].includes(task.status) || !Array.isArray(task.files)
       || !Number.isSafeInteger(task.rows) || task.rows < 0)
       throw new Error('Manifest contains an invalid or failed task.');
@@ -55,10 +61,10 @@ function execute(args) {
   if (result.status !== 0) throw new Error(`Wrangler stopped (${result.signal ?? result.status}).`);
 }
 
-export async function uploadMetadata({ input, local = false, dryRun = false }, run = execute) {
+export async function uploadMetadata({ input, local = false, dryRun = false, allowPartial = false }, run = execute) {
   // Validate every batch before the first database operation, then upload
   // immutable temporary copies of the validated SQL rather than mutable inputs.
-  const batches = await prepareUpload(input);
+  const batches = await prepareUpload(input, { allowPartial });
   const rows = batches.reduce((sum, batch) => sum + batch.rows, 0);
   console.log(`Validated ${batches.length} batches / ${rows} rows for ${local ? 'local' : 'remote'} D1 gacha_meta.`);
   if (dryRun) {
@@ -82,7 +88,7 @@ export async function uploadMetadata({ input, local = false, dryRun = false }, r
 }
 
 export function parseUploadOptions(args) {
-  const options = { input: '', local: false, dryRun: false };
+  const options = { input: '', local: false, dryRun: false, allowPartial: false };
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
@@ -90,8 +96,9 @@ export function parseUploadOptions(args) {
     seen.add(flag);
     if (flag === '--local') options.local = true;
     else if (flag === '--dry-run') options.dryRun = true;
+    else if (flag === '--allow-partial') options.allowPartial = true;
     else if (flag === '--input' && args[index + 1] && !args[index + 1].startsWith('--')) options.input = args[++index];
-    else throw new Error('Usage: npm run metadata:upload -- --input <download-directory> [--local] [--dry-run]');
+    else throw new Error('Usage: npm run metadata:upload -- --input <download-directory> [--local] [--dry-run] [--allow-partial]');
   }
   if (!options.input) throw new Error('--input is required. Upload targets remote D1 by default; use --local for local verification.');
   return options;

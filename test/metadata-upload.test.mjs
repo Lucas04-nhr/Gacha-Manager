@@ -20,8 +20,9 @@ test('CLI requires input and distinguishes remote default, local and dry run', (
   assert.throws(() => parseUploadOptions([]));
   assert.throws(() => parseUploadOptions(['--input', 'out', '--yes']));
   assert.throws(() => parseUploadOptions(['--input', 'out', '--local', '--local']));
-  assert.deepEqual(parseUploadOptions(['--input', 'out']), { input: 'out', local: false, dryRun: false });
-  assert.deepEqual(parseUploadOptions(['--input', 'out', '--local', '--dry-run']), { input: 'out', local: true, dryRun: true });
+  assert.deepEqual(parseUploadOptions(['--input', 'out']), { input: 'out', local: false, dryRun: false, allowPartial: false });
+  assert.deepEqual(parseUploadOptions(['--input', 'out', '--local', '--dry-run']), { input: 'out', local: true, dryRun: true, allowPartial: false });
+  assert.equal(parseUploadOptions(['--input', 'out', '--allow-partial']).allowPartial, true);
 });
 
 test('uploads sequential immutable snapshots with automatic confirmation and cleans them up', async () => {
@@ -38,6 +39,30 @@ test('uploads sequential immutable snapshots with automatic confirmation and cle
     });
     assert.deepEqual(result, { batches: 3, rows: 3 });
     for (const args of calls) await assert.rejects(access(args[5]));
+  });
+});
+
+test('partial manifests upload successful sources only when explicitly allowed', async () => {
+  await fixture(async (input, manifest) => {
+    const uploaded = [];
+    const execute = args => { uploaded.push(args); };
+    const expected = manifest.tasks[0].files.length + manifest.tasks[2].files.length;
+    manifest.complete = false;
+    Object.assign(manifest.tasks[1], { status: 'failed', rows: 0, files: [], stage: 'download', detail: 'Error' });
+    await writeFile(join(input, 'manifest.json'), JSON.stringify(manifest));
+    await assert.rejects(uploadMetadata({ input }, execute), /complete download/);
+    assert.equal(uploaded.length, 0);
+    assert.equal((await uploadMetadata({ input, allowPartial: true }, execute)).batches, expected);
+    assert.equal(uploaded.length, expected);
+    // A manifest claiming completeness may not hide a failed task.
+    manifest.complete = true;
+    await writeFile(join(input, 'manifest.json'), JSON.stringify(manifest));
+    await assert.rejects(uploadMetadata({ input, allowPartial: true }, execute), /failed task/);
+    manifest.complete = false;
+    for (const task of manifest.tasks) Object.assign(task, { status: 'failed', rows: 0, files: [] });
+    await writeFile(join(input, 'manifest.json'), JSON.stringify(manifest));
+    await assert.rejects(uploadMetadata({ input, allowPartial: true }, execute), /No metadata batches/);
+    assert.equal(uploaded.length, expected);
   });
 });
 

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { downloadMetadata, parseOptions, splitPayload } from '../scripts/metadata-download.mjs';
+import { downloadMetadata, parseOptions, reportDownload, splitPayload } from '../scripts/metadata-download.mjs';
 const payload = { source: 'https://example.com/public', entries: [{ game: 'hk4e', lang: 'zh-cn', kind: 'item', item_id: '9007199254740993', name: "测试'物品", rank_type: '5', item_type: 'weapon', type: 'weapon' }] };
 
 test('options reject unknown games, languages and duplicate flags', () => {
@@ -60,5 +60,59 @@ test('failed source keeps nonzero completion while remaining sources are attempt
     assert.equal(result.complete, false);
     assert.deepEqual(result.tasks.map(task => task.status), ['failed', 'skipped', 'success']);
     assert.equal(JSON.stringify(result).includes('private transport details'), false);
+    assert.deepEqual([result.tasks[0].stage, result.tasks[0].detail], ['download', 'Error']);
   } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
+test('failure details expose reviewed adapter text and transport codes, never raw messages', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'gacha-download-detail-'));
+  const adapter = Object.assign(new Error('Upstream unavailable: HTTP 404 for File.json'), { name: 'UpstreamError' });
+  const transport = new TypeError('fetch failed for https://private.example/', { cause: { code: 'ECONNRESET' } });
+  const unsafeCode = new TypeError('fetch failed', { cause: { code: 'https://private.example/' } });
+  try {
+    const result = await downloadMetadata({ output: join(parent, 'out'), jobs: [adapter, transport, unsafeCode].map(error => (
+      { game: 'hk4e', lang: 'zh-cn', load: async () => { throw error; } }
+    )).concat({ game: 'hk4e', lang: 'zh-cn', load: async () => ({ source: 'https://example.com/public', entries: [] }) }) });
+    assert.deepEqual(result.tasks.map(task => [task.stage, task.detail]), [
+      ['download', 'Upstream unavailable: HTTP 404 for File.json'],
+      ['download', 'TypeError (ECONNRESET)'],
+      ['download', 'TypeError'],
+      ['validation', 'Error'],
+    ]);
+    assert.equal(JSON.stringify(result).includes('private.example'), false);
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
+test('partial downloads pass only when allowed and at least one source succeeded', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'gacha-download-report-'));
+  const summary = join(parent, 'summary.md');
+  const env = { GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary };
+  const failed = { game: 'hk4e_ugc', language: 'en-us', status: 'failed', rows: 0, stage: 'download', detail: 'Unrecognized outfit ID field' };
+  const success = { game: 'hk4e', language: 'zh-cn', status: 'success', rows: 3 };
+  const skipped = { game: 'hk4e_ugc', language: 'ja-jp', status: 'skipped', rows: 0, reason: 'No resolved translations.' };
+  const lines = [];
+  const log = console.log;
+  console.log = line => lines.push(String(line));
+  try {
+    assert.equal(await reportDownload({ complete: true, tasks: [success, skipped] }, { env: {} }), 0);
+    assert.equal(await reportDownload({ complete: false, tasks: [failed, success] }, { env: {} }), 1);
+    assert.equal(lines.length, 0);
+    assert.equal(await reportDownload({ complete: false, tasks: [failed, skipped] }, { allowPartial: true, env }), 1);
+    assert.ok(lines.at(-1).startsWith('::error '));
+    assert.equal(await reportDownload({ complete: false, tasks: [failed, success] }, { allowPartial: true, env }), 0);
+    assert.equal(lines.at(-1), '::warning title=Metadata source failed::hk4e_ugc / en-us during download: Unrecognized outfit ID field');
+    const written = await readFile(summary, 'utf8');
+    assert.ok(written.includes('| hk4e_ugc | en-us | failed | 0 | Unrecognized outfit ID field |'));
+    assert.ok(written.includes('1 of 2 sources failed.'));
+    assert.equal(await reportDownload({ complete: true, tasks: [success] }, { env: { GITHUB_STEP_SUMMARY: join(parent, 'missing', 'summary.md') } }), 0);
+  } finally {
+    console.log = log;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('download options accept the partial switch once', () => {
+  assert.equal(parseOptions(['--output', 'out']).allowPartial, false);
+  assert.equal(parseOptions(['--allow-partial', '--output', 'out']).allowPartial, true);
+  assert.throws(() => parseOptions(['--allow-partial', '--allow-partial', '--output', 'out']), /Usage/);
 });

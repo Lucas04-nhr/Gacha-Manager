@@ -12,8 +12,20 @@ const textCodes: Record<string, string> = { en: 'EN', 'zh-cn': 'CHS', 'zh-tw': '
 const enka = 'https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store';
 const dimbreath = { hk4e: 'https://gitlab.com/Dimbreath/animegamedata2/-/raw/main', hkrpg: 'https://gitlab.com/Dimbreath/turnbasedgamedata/-/raw/main', nap: 'https://git.mero.moe/Dimbreath/ZenlessData/raw/branch/master' };
 
+// Messages are fixed text plus built-in public file names and HTTP statuses, so
+// operator tooling may print them. Never put payloads or feed URLs in one.
+class UpstreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UpstreamError';
+  }
+}
+
+function fileName(url: string): string {
+  return url.slice(url.lastIndexOf('/') + 1);
+}
 function object(value: unknown): ObjectData {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid upstream object');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new UpstreamError('Invalid upstream object');
   return value as ObjectData;
 }
 function text(value: unknown): string | undefined {
@@ -49,7 +61,7 @@ export function parseUpstreamJson(input: string): unknown {
 
 async function download(url: string, limit = 1024 * 1024): Promise<unknown> {
   const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(20000), headers: { Accept: 'application/json' } });
-  if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error('Upstream unavailable'); }
+  if (!response.ok || !response.body) { await response.body?.cancel(); throw new UpstreamError(`Upstream unavailable: HTTP ${response.status} for ${fileName(url)}`); }
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
   let bytes = 0;
@@ -59,7 +71,7 @@ async function download(url: string, limit = 1024 * 1024): Promise<unknown> {
       const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > limit) throw new Error('Upstream exceeds size limit');
+      if (bytes > limit) throw new UpstreamError('Upstream exceeds size limit');
       input += decoder.decode(chunk.value, { stream: true });
     }
     input += decoder.decode();
@@ -71,7 +83,7 @@ async function download(url: string, limit = 1024 * 1024): Promise<unknown> {
 // retain only requested hashes instead of materializing the whole map in RAM.
 async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectData> {
   const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(20000) });
-  if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error('Fallback unavailable'); }
+  if (!response.ok || !response.body) { await response.body?.cancel(); throw new UpstreamError(`Fallback unavailable: HTTP ${response.status} for ${fileName(url)}`); }
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
   const result: ObjectData = {};
@@ -82,7 +94,7 @@ async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectDa
   let lastCharacter = '';
   function consume(input: string): void {
     if (!started && input.trim()) {
-      if (!input.trimStart().startsWith('{')) throw new Error('Invalid localization map');
+      if (!input.trimStart().startsWith('{')) throw new UpstreamError('Invalid localization map');
       started = true;
     }
     if (input.trim()) lastCharacter = input.trimEnd().slice(-1);
@@ -95,35 +107,35 @@ async function downloadNames(url: string, wanted: Set<string>): Promise<ObjectDa
       const hash = match[1] ?? '';
       if (!remaining.delete(hash)) continue;
       const value: unknown = JSON.parse(match[2] ?? 'null');
-      if (typeof value !== 'string') throw new Error('Invalid localization value');
+      if (typeof value !== 'string') throw new UpstreamError('Invalid localization value');
       result[hash] = value;
     }
     // Keep only the incomplete entry; it may span network chunks.
     buffer = buffer.slice(consumed);
-    if (buffer.length > 1024 * 1024) throw new Error('Localization entry too large');
+    if (buffer.length > 1024 * 1024) throw new UpstreamError('Localization entry too large');
   }
   try {
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > 64 * 1024 * 1024) throw new Error('Fallback map too large');
+      if (bytes > 64 * 1024 * 1024) throw new UpstreamError('Fallback map too large');
       consume(decoder.decode(chunk.value, { stream: true }));
       if (!remaining.size) return result;
     }
     consume(decoder.decode());
-    if (!started || lastCharacter !== '}') throw new Error('Truncated localization map');
+    if (!started || lastCharacter !== '}') throw new UpstreamError('Truncated localization map');
     return result;
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
 export function enkaItems(game: Game, avatars: unknown, weapons: unknown, localization: unknown, lang: string): Candidate[] {
   const locale = languages[lang];
-  if (!locale) throw new Error('Unsupported upstream language');
+  if (!locale) throw new UpstreamError('Unsupported upstream language');
   const loc = object(object(localization)[locale]);
   const rows: Candidate[] = [];
   for (const [character, entries] of [[true, object(avatars)], [false, object(weapons)]] as const) {
-    if (!Object.keys(entries).length) throw new Error('Empty processed store');
+    if (!Object.keys(entries).length) throw new UpstreamError('Empty processed store');
     for (const [id, value] of Object.entries(entries)) {
       if (!/^\d{1,20}$/.test(id)) continue; // GI element variants are not separate public item IDs.
       const data = object(value);
@@ -145,7 +157,7 @@ export function enkaItems(game: Game, avatars: unknown, weapons: unknown, locali
         rank = typeof data.Rarity === 'number' ? data.Rarity + 1 : undefined;
         image = character ? data.Image : data.ImagePath;
       }
-      if (rank !== undefined && ![3, 4, 5].includes(rank)) throw new Error('Invalid upstream rank');
+      if (rank !== undefined && ![3, 4, 5].includes(rank)) throw new UpstreamError('Invalid upstream rank');
       rows.push({ id, nameKey: hash, name: name(loc, hash), rank, icon: icon(image), type: character ? 'character' : game === 'hk4e' ? 'weapon' : game === 'hkrpg' ? 'light_cone' : 'w_engine' });
     }
   }
@@ -157,7 +169,7 @@ async function supplement(game: Game, lang: string, rows: Candidate[]): Promise<
   if (!missing.length) return { rows, count: 0 };
   const locale = languages[lang];
   const code = locale ? textCodes[locale] : undefined;
-  if (!code) throw new Error('No verified fallback locale');
+  if (!code) throw new UpstreamError('No verified fallback locale');
   let loc: ObjectData;
   const configs = new Map<string, ObjectData>();
   if (game === 'nap') {
@@ -168,9 +180,9 @@ async function supplement(game: Game, lang: string, rows: Candidate[]): Promise<
       : { character: 'ExcelOutput/AvatarConfig.json', light_cone: 'ExcelOutput/EquipmentConfig.json' };
     for (const type of new Set(missing.filter(row => row.rank === undefined || !row.icon || !row.nameKey).map(row => row.type))) {
       const path = files[type];
-      if (!path) throw new Error('Unknown fallback type');
+      if (!path) throw new UpstreamError('Unknown fallback type');
       const values = await download(`${dimbreath[game]}/${path}`, 8 * 1024 * 1024);
-      if (!Array.isArray(values)) throw new Error('Invalid fallback configuration');
+      if (!Array.isArray(values)) throw new UpstreamError('Invalid fallback configuration');
       for (const value of values) {
         const data = object(value);
         const id = key(game === 'hk4e' ? data.id : type === 'character' ? data.AvatarID : data.EquipmentID);
@@ -221,39 +233,53 @@ export function starwardItems(input: unknown, game: 'nap' | 'hk4e_ugc', lang: st
   if (game === 'nap') {
     const root = object(input);
     const data = object(root.data);
-    if (root.retcode !== 0 || data.game !== 'nap' || data.lang !== lang) throw new Error('Unexpected Starward locale');
+    if (root.retcode !== 0 || data.game !== 'nap' || data.lang !== lang) throw new UpstreamError('Unexpected Starward locale');
     values = data.list;
     source = `https://starward-static.scighost.com/metadata/v1/zzz/ZZZGachaInfo.nap_global.${lang}.json`;
   } else {
-    if (lang !== 'zh-cn') throw new Error('Outfit source is Chinese only');
+    if (lang !== 'zh-cn') throw new UpstreamError('Outfit source is Chinese only');
     values = input;
     source = 'https://starward-static.scighost.com/game-assets/genshin/GenshinBeyondGachaInfo.json';
   }
-  if (!Array.isArray(values) || !values.length) throw new Error('Empty Starward metadata');
+  if (!Array.isArray(values) || !values.length) throw new UpstreamError('Empty Starward metadata');
   const entries: UpstreamEntry[] = values.flatMap((value): UpstreamEntry[] => {
     const row = object(value);
     const id = key(game === 'nap' ? row.id : row.Id);
-    if (!id || !/^\d+$/.test(id)) throw new Error('Invalid Starward ID');
+    if (!id || !/^\d+$/.test(id)) throw new UpstreamError('Invalid Starward ID');
     if (game === 'nap' && !/^5\d{4}$/.test(id)) return [];
     const rank = game === 'nap' ? row.rarity : row.Rank;
-    if (typeof rank !== 'number' || !Number.isInteger(rank) || !(game === 'nap' ? [2, 3, 4] : [0, 1, 2, 3, 4, 5]).includes(rank)) throw new Error('Invalid Starward rank');
+    if (typeof rank !== 'number' || !Number.isInteger(rank) || !(game === 'nap' ? [2, 3, 4] : [0, 1, 2, 3, 4, 5]).includes(rank)) throw new UpstreamError('Invalid Starward rank');
     const title = text(game === 'nap' ? row.name : row.Name);
     const image = icon(game === 'nap' ? row.icon : row.Icon);
     if (!title) return []; // Upstream contains unnamed/unreleased entries; never invent names.
-    if (!image) throw new Error('Incomplete Starward icon');
+    if (!image) throw new UpstreamError('Incomplete Starward icon');
     const type = game === 'nap' ? 'bangboo' : 'ugc_item';
     return [{ game, lang, kind: 'item', item_id: id, name: title, rank_type: String(rank), item_type: type, type, icon: image }];
   });
-  if (!entries.length) throw new Error('No Starward items');
+  if (!entries.length) throw new UpstreamError('No Starward items');
   return { source, entries };
+}
+
+// Dimbreath's obfuscated drawing field names change between game versions, so
+// identify the item ID by shape. Ambiguity fails rather than risking wrong names.
+function drawingIdField(rows: ObjectData[], wanted: Set<string>): string {
+  const candidates = Object.keys(rows[0] ?? {}).filter(field => {
+    if (/hash$/i.test(field)) return false;
+    const values = rows.map(row => row[field]);
+    return values.every(value => Number.isSafeInteger(value)) && new Set(values).size === rows.length
+      && values.some(value => wanted.has(String(value)));
+  });
+  const [field] = candidates;
+  if (field === undefined || candidates.length > 1) throw new UpstreamError('Unrecognized outfit ID field');
+  return field;
 }
 
 export function upstreamJobs(env: { UPSTREAM_SYNC_ENABLED: string; UPSTREAM_LANGUAGES: string }): Job[] {
   if (env.UPSTREAM_SYNC_ENABLED === 'false') return [];
-  if (env.UPSTREAM_SYNC_ENABLED !== 'true') throw new Error('Invalid upstream switch');
+  if (env.UPSTREAM_SYNC_ENABLED !== 'true') throw new UpstreamError('Invalid upstream switch');
   const selected: unknown = JSON.parse(env.UPSTREAM_LANGUAGES);
   if (!Array.isArray(selected) || !selected.length || selected.length > catalog.languages.length
-    || selected.some(lang => typeof lang !== 'string' || !catalog.languages.includes(lang)) || new Set(selected).size !== selected.length) throw new Error('Invalid upstream languages');
+    || selected.some(lang => typeof lang !== 'string' || !catalog.languages.includes(lang)) || new Set(selected).size !== selected.length) throw new UpstreamError('Invalid upstream languages');
   const jobs: Job[] = (Object.keys(stores) as Game[]).flatMap(game => {
     // Cache downloads only within this synchronization, never across requests.
     let store: Promise<[unknown, unknown, unknown]> | undefined;
@@ -281,21 +307,21 @@ export function upstreamJobs(env: { UPSTREAM_SYNC_ENABLED: string; UPSTREAM_LANG
       costumeHashes ??= (async () => {
         const wanted = new Set(primary.entries.map(row => row.item_id));
         const hashes = new Map<string, string>();
-        const configurations = [
+        const configurations: { file: string; idField?: string }[] = [
           { file: 'BeyondCostumeExcelConfigData.json', idField: 'costumeId' },
-          // Verified drawing item ID field in Dimbreath's current obfuscated schema.
-          { file: 'BeyondCostumeDrawingExcelConfigData.json', idField: 'FHIDKAKGMFN' },
+          { file: 'BeyondCostumeDrawingExcelConfigData.json' },
         ];
         for (const configuration of configurations) {
           const values = await download(`${dimbreath.hk4e}/ExcelBinOutput/${configuration.file}`, 8 * 1024 * 1024);
-          if (!Array.isArray(values) || !values.length) throw new Error('Invalid outfit configuration');
-          for (const value of values) {
-            const row = object(value);
-            const id = key(row[configuration.idField]);
+          if (!Array.isArray(values) || !values.length) throw new UpstreamError('Invalid outfit configuration');
+          const rows = values.map(value => object(value));
+          const idField = configuration.idField ?? drawingIdField(rows, wanted);
+          for (const row of rows) {
+            const id = key(row[idField]);
             const hash = key(row.nameTextMapHash);
-            if (!id) throw new Error('Unrecognized outfit ID field');
+            if (!id) throw new UpstreamError('Unrecognized outfit ID field');
             if (!wanted.has(id) || !hash || !/^\d{1,20}$/.test(hash)) continue;
-            if (hashes.has(id) && hashes.get(id) !== hash) throw new Error('Conflicting outfit name hashes');
+            if (hashes.has(id) && hashes.get(id) !== hash) throw new UpstreamError('Conflicting outfit name hashes');
             hashes.set(id, hash);
           }
         }
@@ -303,7 +329,7 @@ export function upstreamJobs(env: { UPSTREAM_SYNC_ENABLED: string; UPSTREAM_LANG
       })();
       const hashes = await costumeHashes;
       const code = textCodes[languages[lang] ?? ''];
-      if (!code) throw new Error('No verified fallback locale');
+      if (!code) throw new UpstreamError('No verified fallback locale');
       const loc = hashes.size ? await downloadNames(`${dimbreath.hk4e}/TextMap/TextMap${code}.json`, new Set(hashes.values())) : {};
       const entries = primary.entries.flatMap(row => {
         const title = name(loc, hashes.get(row.item_id));
