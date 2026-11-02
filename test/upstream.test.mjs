@@ -198,16 +198,16 @@ test('localization streaming rejects truncated maps and oversized entries', asyn
   await assert.rejects(localizeOutfits(`{"long":"${'x'.repeat(2 * 1024 * 1024)}","111":"Outfit"}`, 64 * 1024), /Localization entry too large/);
 });
 
-async function localizeDrawings(drawings) {
+async function localizeDrawings(drawings, primaryId = 275016) {
   const original = globalThis.fetch;
   globalThis.fetch = async input => {
     const url = String(input);
     if (url.endsWith('GenshinBeyondGachaInfo.json')) return Response.json([
-      { Id: 275016, Name: '测试形录', Rank: 4, Icon: 'https://example.com/catalog.png' },
+      { Id: primaryId, Name: '测试条目', Rank: 4, Icon: 'https://example.com/catalog.png' },
     ]);
     if (url.endsWith('BeyondCostumeExcelConfigData.json')) return Response.json([{ costumeId: 260001, nameTextMapHash: 123 }]);
     if (url.endsWith('BeyondCostumeDrawingExcelConfigData.json')) return new Response(drawings);
-    if (url.endsWith('TextMapEN.json')) return Response.json({ 3481381737: 'Synthetic catalog' });
+    if (url.endsWith('TextMapEN.json')) return Response.json({ 123: 'Localized outfit', 3481381737: 'Synthetic catalog' });
     throw new Error('Unexpected request');
   };
   try {
@@ -216,6 +216,11 @@ async function localizeDrawings(drawings) {
     return await job.load();
   } finally { globalThis.fetch = original; }
 }
+
+test('costume translations proceed when no primary item is a drawing', async () => {
+  const result = await localizeDrawings(JSON.stringify([{ LHDNMFFMIJH: 275016, nameTextMapHash: 3481381737 }]), 260001);
+  assert.deepEqual(result.entries.map(row => [row.item_id, row.name]), [['260001', 'Localized outfit']]);
+});
 
 test('UGC drawing ID field is identified by shape across renamed obfuscated schemas', async () => {
   for (const field of ['FHIDKAKGMFN', 'LHDNMFFMIJH']) {
@@ -231,8 +236,6 @@ test('UGC drawing schema changes fail explicitly instead of silently dropping tr
   const rejected = [
     // No ID column at all.
     [{ nameTextMapHash: 3481381737, label: 'Green' }],
-    // Unique integers that match no primary item are not item IDs.
-    [{ unrelated: 1, nameTextMapHash: 3481381737 }],
     // Two columns could be the ID; picking one risks assigning wrong names.
     [{ first: 275016, second: 275016, nameTextMapHash: 3481381737 }],
     // Duplicated values cannot identify rows.

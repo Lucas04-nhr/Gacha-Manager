@@ -262,15 +262,16 @@ export function starwardItems(input: unknown, game: 'nap' | 'hk4e_ugc', lang: st
 
 // Dimbreath's obfuscated drawing field names change between game versions, so
 // identify the item ID by shape. Ambiguity fails rather than risking wrong names.
+// With no primary drawings any candidate maps nothing, so costumes still proceed.
 function drawingIdField(rows: ObjectData[], wanted: Set<string>): string {
   const candidates = Object.keys(rows[0] ?? {}).filter(field => {
     if (/hash$/i.test(field)) return false;
     const values = rows.map(row => row[field]);
-    return values.every(value => Number.isSafeInteger(value)) && new Set(values).size === rows.length
-      && values.some(value => wanted.has(String(value)));
+    return values.every(value => Number.isSafeInteger(value)) && new Set(values).size === rows.length;
   });
-  const [field] = candidates;
-  if (field === undefined || candidates.length > 1) throw new UpstreamError('Unrecognized outfit ID field');
+  const matched = candidates.filter(field => rows.some(row => wanted.has(String(row[field]))));
+  const [field] = matched.length ? matched : candidates;
+  if (field === undefined || matched.length > 1) throw new UpstreamError('Unrecognized outfit ID field');
   return field;
 }
 
