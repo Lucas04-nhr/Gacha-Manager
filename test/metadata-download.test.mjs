@@ -69,6 +69,9 @@ test('failure details expose reviewed adapter text and transport codes, never ra
   const adapter = Object.assign(new Error('Upstream unavailable: HTTP 404 for File.json'), { name: 'UpstreamError' });
   const transport = new TypeError('fetch failed for https://private.example/', { cause: { code: 'ECONNRESET' } });
   const unsafeCode = new TypeError('fetch failed', { cause: { code: 'https://private.example/' } });
+  const logged = [];
+  const { log, error } = console;
+  console.log = console.error = (...args) => logged.push(args.join(' '));
   try {
     const result = await downloadMetadata({ output: join(parent, 'out'), jobs: [adapter, transport, unsafeCode].map(error => (
       { game: 'hk4e', lang: 'zh-cn', load: async () => { throw error; } }
@@ -80,7 +83,12 @@ test('failure details expose reviewed adapter text and transport codes, never ra
       ['validation', 'Error'],
     ]);
     assert.equal(JSON.stringify(result).includes('private.example'), false);
-  } finally { await rm(parent, { recursive: true, force: true }); }
+    assert.ok(logged.some(line => line.includes('during download: TypeError (ECONNRESET).')));
+    assert.equal(logged.join('\n').includes('private.example'), false);
+  } finally {
+    Object.assign(console, { log, error });
+    await rm(parent, { recursive: true, force: true });
+  }
 });
 
 test('partial downloads pass only when allowed and at least one source succeeded', async () => {
