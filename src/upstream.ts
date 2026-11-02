@@ -269,9 +269,10 @@ function drawingIdField(rows: ObjectData[], wanted: Set<string>): string {
     const values = rows.map(row => row[field]);
     return values.every(value => Number.isSafeInteger(value)) && new Set(values).size === rows.length;
   });
-  const matched = candidates.filter(field => rows.some(row => wanted.has(String(row[field]))));
-  const [field] = matched.length ? matched : candidates;
-  if (field === undefined || matched.length > 1) throw new UpstreamError('Unrecognized outfit ID field');
+  const [field] = candidates;
+  // A second candidate may be a reference column, so a match alone proves nothing.
+  const ambiguous = candidates.length > 1 && candidates.some(candidate => rows.some(row => wanted.has(String(row[candidate]))));
+  if (field === undefined || ambiguous) throw new UpstreamError('Unrecognized outfit ID field');
   return field;
 }
 

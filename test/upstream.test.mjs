@@ -238,6 +238,8 @@ test('UGC drawing schema changes fail explicitly instead of silently dropping tr
     [{ nameTextMapHash: 3481381737, label: 'Green' }],
     // Two columns could be the ID; picking one risks assigning wrong names.
     [{ first: 275016, second: 275016, nameTextMapHash: 3481381737 }],
+    // A scalar reference column must not win just because the real ID column matches nothing.
+    [{ realId: 279999, reference: 275016, nameTextMapHash: 3481381737 }],
     // Duplicated values cannot identify rows.
     [{ repeated: 275016, nameTextMapHash: 3481381737 }, { repeated: 275016, nameTextMapHash: 123 }],
     // The ID column must be present on every row.
