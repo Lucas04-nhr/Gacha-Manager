@@ -23,6 +23,7 @@ jobs:
           node-version: '26'
           cache: npm
       - name: Check D1 upload credential
+        id: credential
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -30,18 +31,115 @@ jobs:
             echo 'Configure the CLOUDFLARE_API_TOKEN Actions secret with D1 Edit access.' >&2
             exit 1
           fi
-      - run: npm ci
+      - name: Install dependencies
+        id: install
+        run: npm ci
       - name: Download and parse public metadata
+        id: download
         run: npm run metadata:download -- --output metadata-download-actions --allow-partial
       - name: Validate all upload batches
+        id: validate
         run: npm run metadata:upload -- --input metadata-download-actions --allow-partial --dry-run
       - name: Upload public metadata to remote D1
+        id: upload
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run metadata:upload -- --input metadata-download-actions --allow-partial
       - name: Remove unsupported public metadata languages
+        id: prune
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run metadata:prune
+      - name: Report sync result
+        if: ${{ !cancelled() }}
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          JOB_STATUS: ${{ job.status }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          FAILED_STEP: ${{ steps.credential.outcome == 'failure' && 'Check D1 upload credential' || steps.install.outcome == 'failure' && 'Install dependencies' || steps.download.outcome == 'failure' && 'Download and parse public metadata' || steps.validate.outcome == 'failure' && 'Validate all upload batches' || steps.upload.outcome == 'failure' && 'Upload public metadata to remote D1' || steps.prune.outcome == 'failure' && 'Remove unsupported public metadata languages' || '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          repo="${GITHUB_REPOSITORY#*/}"
+          manifest="metadata-download-actions/manifest.json"
+          total=0 succeeded=0 failed=0 skipped=0 rows=0 failed_sources=""
+          if [ -f "$manifest" ]; then
+            total=$(jq '.tasks | length' "$manifest")
+            succeeded=$(jq '[.tasks[] | select(.status == "success")] | length' "$manifest")
+            failed=$(jq '[.tasks[] | select(.status == "failed")] | length' "$manifest")
+            skipped=$(jq '[.tasks[] | select(.status == "skipped")] | length' "$manifest")
+            rows=$(jq '[.tasks[].rows] | add // 0' "$manifest")
+            failed_sources=$(jq -r '.tasks[] | select(.status == "failed") | "\(.game) / \(.language) during \(.stage): \(.detail)"' "$manifest")
+          fi
+
+          rows_label="Rows prepared"
+          if [ "$UPLOAD_OUTCOME" = "success" ]; then
+            rows_label="Rows uploaded"
+          fi
+
+          if [ "$JOB_STATUS" != "success" ]; then
+            level="error"
+            title="Metadata sync failed"
+            if [ -n "$FAILED_STEP" ]; then
+              short="$repo: Failed at $FAILED_STEP"
+              message="Failed at $FAILED_STEP."
+            else
+              short="$repo: The sync workflow failed"
+              message="The sync workflow failed."
+            fi
+          elif [ "$failed" -gt 0 ]; then
+            level="warning"
+            title="Metadata sync has warnings"
+            short="$repo: $rows rows, $failed of $total sources failed"
+            message="$rows rows uploaded, and $failed of $total sources failed. Existing rows for those sources are preserved."
+          else
+            level="notice"
+            title="Metadata sync completed"
+            short="$repo: $rows rows from $succeeded sources"
+            message="$rows rows uploaded from $succeeded of $total sources."
+          fi
+
+          # One annotation per run, because GitHub shows at most 10 annotations of a level per step.
+          annotation="$message"
+          if [ -n "$failed_sources" ]; then
+            annotation+=$'\n'"$failed_sources"
+          fi
+          annotation="${annotation//%/%25}"
+          annotation="${annotation//$'\r'/%0D}"
+          annotation="${annotation//$'\n'/%0A}"
+          printf '::%s title=%s::%s\n' "$level" "$title" "$annotation"
+
+          if [ -z "$SERVERCHAN_SENDKEY" ]; then
+            echo "::warning title=Metadata push skipped::Set the SERVERCHAN_SENDKEY secret to enable pushes."
+            exit 0
+          fi
+          if [[ ! "$SERVERCHAN_SENDKEY" =~ ^sctp([0-9]+)t ]]; then
+            echo "::error title=Metadata push failed::SERVERCHAN_SENDKEY is not a ServerChan3 key (sctp...)."
+            exit 1
+          fi
+          uid="${BASH_REMATCH[1]}"
+          echo "::add-mask::$uid"
+
+          desp="- Repository: \`$repo\`
+          - Trigger: \`$GITHUB_EVENT_NAME\`
+          - Result: \`$JOB_STATUS\`
+          - Sources: $succeeded succeeded, $failed failed, $skipped skipped
+          - $rows_label: $rows"
+          if [ -n "$FAILED_STEP" ]; then
+            desp+=$'\n'"- Failed step: \`$FAILED_STEP\`"
+          fi
+          if [ -n "$failed_sources" ]; then
+            desp+=$'\n\n'"**Failed sources**"$'\n\n'"$(sed 's/.*/- &/' <<< "$failed_sources")"
+          fi
+          desp+=$'\n\n'"Check the [workflow run]($RUN_URL) for detailed logs."
+
+          response=$(curl -sS --fail-with-body --retry 3 \
+            --data-urlencode "title=$title" \
+            --data-urlencode "desp=$desp" \
+            --data-urlencode "short=$short" \
+            --data-urlencode "tags=GitHub" \
+            "https://$uid.push.ft07.com/send/$SERVERCHAN_SENDKEY.send")
+          # The response may carry a read key and the logs are public, so print only the status.
+          jq -r '"code=\(.code // "none") message=\(.message // "")"' <<< "$response"
+          jq -e '(.code // 0) == 0' <<< "$response" > /dev/null
